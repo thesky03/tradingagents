@@ -243,3 +243,71 @@ def test_validate_book_clean():
         "FFF": (500.0, "gold"),
     }  # invested 4000 -> cash 20%
     assert validate_book(positions, book) == []
+
+
+# --- v1.1: owner yield (base total return) -----------------------------------
+
+
+def test_base_total_return_computation():
+    s = SecuritySnapshot(dividend_yield=0.01, buyback_yield=0.048, sbc_yield=0.002)
+    assert s.base_total_return() == pytest.approx(0.056)
+    assert SecuritySnapshot().base_total_return() is None
+    # SBC-only company: negative carry
+    assert SecuritySnapshot(sbc_yield=0.04).base_total_return() == pytest.approx(-0.04)
+
+
+def test_owner_yield_adjustment_bounded_and_applied():
+    rich = fable_score(_quality_snapshot(
+        dividend_yield=0.02, buyback_yield=0.06, sbc_yield=0.005))
+    assert rich.owner_yield_adj == 5.0            # 7.5% capped at +5
+    drained = fable_score(_quality_snapshot(sbc_yield=0.08))
+    assert drained.owner_yield_adj == -5.0        # -8% capped at -5
+    neutral = fable_score(_quality_snapshot())
+    assert neutral.owner_yield_adj == 0.0
+    assert rich.total > neutral.total > drained.total
+
+
+def test_owner_yield_cannot_rescue_gated_name():
+    r = fable_score(_quality_snapshot(
+        mania_exposure=True, dividend_yield=0.05, buyback_yield=0.05))
+    assert r.total == 0.0
+
+
+# --- v1.1: verdict-tiered Kelly caps -----------------------------------------
+
+
+def test_kelly_caps_tier_by_verdict():
+    low_vol = 0.20
+    assert kelly_fraction(65, low_vol) <= 0.08    # STARTER tier
+    assert kelly_fraction(75, low_vol) <= 0.12    # BUY tier
+    assert kelly_fraction(95, low_vol) <= 0.15    # STRONG tier
+    assert kelly_fraction(95, low_vol) == 0.15    # low vol reaches its tier cap
+
+
+# --- v1.1: regulated-utility leverage carve-out ------------------------------
+
+
+def test_utility_leverage_carveout():
+    utility = fable_score(_quality_snapshot(
+        net_debt_to_ebitda=5.5, is_regulated_utility=True))
+    assert "leverage" not in utility.gates_tripped
+    non_utility = fable_score(_quality_snapshot(net_debt_to_ebitda=5.5))
+    assert "leverage" in non_utility.gates_tripped
+    # 6x remains the utility ceiling
+    over = fable_score(_quality_snapshot(
+        net_debt_to_ebitda=6.5, is_regulated_utility=True))
+    assert "leverage" in over.gates_tripped
+
+
+# --- v1.1: input coverage ----------------------------------------------------
+
+
+def test_coverage_reported():
+    full = fable_score(_quality_snapshot(
+        dividend_yield=0.01, buyback_yield=0.02, sbc_yield=0.005))
+    empty = fable_score(SecuritySnapshot(ticker="EMPTY"))
+    assert full.coverage > 0.9
+    assert empty.coverage == 0.0
+    partial = fable_score(SecuritySnapshot(ticker="P", roic=0.2, wacc=0.1,
+                                           momentum_12_1_percentile=50.0))
+    assert 0.0 < partial.coverage < 0.3

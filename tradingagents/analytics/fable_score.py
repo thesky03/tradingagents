@@ -145,8 +145,17 @@ class SecuritySnapshot:
     has_defined_exit: Optional[bool] = None
     adequately_liquid: Optional[bool] = None
 
+    # --- Owner yield (base total return) ---
+    # "The gain or loss you get before the market moves": what the company
+    # pays you (dividends), buys back for you (repurchases), and takes back
+    # from you (stock-based compensation), each as a yield on market cap.
+    dividend_yield: Optional[float] = None           # decimal, 0.012 = 1.2%
+    buyback_yield: Optional[float] = None            # gross repurchases / market cap
+    sbc_yield: Optional[float] = None                # SBC expense / market cap
+
     # --- Gates ---
     is_financial: bool = False                       # leverage gate not meaningful for banks
+    is_regulated_utility: bool = False               # rate-base leverage is structural
     restatement_or_auditor_flag: bool = False
     share_count_growth_3y: Optional[float] = None    # annualized dilution
     pre_revenue_or_terminal_heavy: bool = False      # >80% of value in terminal assumptions
@@ -155,6 +164,24 @@ class SecuritySnapshot:
 
     # --- Sizing ---
     annual_volatility: float = 0.30                  # for Kelly variance
+
+    def base_total_return(self) -> Optional[float]:
+        """Dividend + buyback - SBC, as a yield on market cap.
+
+        The pre-appreciation return: what an owner collects (or silently
+        loses) with the price standing still. A company paying 1% in
+        dividends and retiring 4% of its shares while granting 0.5% in
+        SBC hands its owner +4.5% before the market moves; a company
+        granting 4% in SBC with no offset starts every year -4% behind.
+        Buffett's "tolls between the business and its owner", made a
+        number. Returns None when none of the three inputs was sourced.
+        """
+        parts = (self.dividend_yield, self.buyback_yield, self.sbc_yield)
+        if all(x is None for x in parts):
+            return None
+        return ((self.dividend_yield or 0.0)
+                + (self.buyback_yield or 0.0)
+                - (self.sbc_yield or 0.0))
 
 
 @dataclass
@@ -165,17 +192,25 @@ class FableResult:
     behavior: float
     longevity: float
     entry: float
+    owner_yield_adj: float = 0.0        # +/-5: base total return, 1pt per 1%
+    base_total_return: Optional[float] = None
+    coverage: float = 1.0               # fraction of scoreable inputs sourced
     gates_tripped: List[str] = field(default_factory=list)
 
     @property
     def total(self) -> float:
-        """0 if any gate tripped - gates are vetoes, not deductions."""
+        """0 if any gate tripped - gates are vetoes, not deductions.
+
+        Otherwise pillar sum plus the owner-yield adjustment (v1.1):
+        base total return earns +/-1 point per 1% of yield, capped at
+        +/-5, so carry can promote a borderline name or demote an
+        SBC-heavy one, but can never outvote the pillars.
+        """
         if self.gates_tripped:
             return 0.0
-        return round(
-            self.fundamentals + self.asymmetry + self.behavior
-            + self.longevity + self.entry, 1
-        )
+        raw = (self.fundamentals + self.asymmetry + self.behavior
+               + self.longevity + self.entry + self.owner_yield_adj)
+        return round(_clamp(raw, 0.0, 100.0), 1)
 
     @property
     def verdict(self) -> str:
@@ -437,9 +472,12 @@ def check_gates(s: SecuritySnapshot) -> List[str]:
       company at a mania price is not a great stock.
     """
     tripped: List[str] = []
-    if (not s.is_financial and s.net_debt_to_ebitda is not None
-            and s.net_debt_to_ebitda > 4.0):
-        tripped.append("leverage")
+    if not s.is_financial and s.net_debt_to_ebitda is not None:
+        # Regulated utilities carry rate-base leverage by design; the
+        # survival question starts at ~6x for them, ~4x for everyone else.
+        ceiling = 6.0 if s.is_regulated_utility else 4.0
+        if s.net_debt_to_ebitda > ceiling:
+            tripped.append("leverage")
     if s.restatement_or_auditor_flag or (
             s.accruals_to_assets is not None and s.accruals_to_assets > 0.10):
         tripped.append("accounting")
@@ -459,8 +497,40 @@ def check_gates(s: SecuritySnapshot) -> List[str]:
 # ---------------------------------------------------------------------------
 
 
+#: Optional inputs that carry scoring weight; used for the coverage metric.
+_SCOREABLE_FIELDS = (
+    "gross_profit_to_assets", "roic", "fcf_to_net_income", "accruals_to_assets",
+    "margin_trend", "revenue_cagr_3y", "earnings_yield", "ev_ebit",
+    "implied_growth", "downside_loss_if_growth_halves",
+    "momentum_12_1_percentile", "above_200dma", "estimate_revision_breadth",
+    "relative_strength_on_down_days", "short_interest_pct_float",
+    "gross_margin_stability", "moat_evidence_count", "net_debt_to_ebitda",
+    "interest_coverage", "reinvestment_runway", "insider_alignment",
+    "regime_fit", "pct_off_52w_high", "valuation_percentile_vs_history",
+    "has_defined_exit", "adequately_liquid",
+    "dividend_yield", "buyback_yield", "sbc_yield",
+)
+
+
+def input_coverage(s: SecuritySnapshot) -> float:
+    """Fraction of scoreable inputs actually sourced (0-1).
+
+    Because unknown fields score zero, a low-coverage snapshot is
+    systematically haircut - correct for ranking within a uniformly
+    sourced universe, but the absolute 60/70/80 thresholds assume high
+    coverage. Interpret a 58 at 0.6 coverage as "insufficiently
+    researched", not "researched and rejected".
+    """
+    sourced = sum(1 for f in _SCOREABLE_FIELDS if getattr(s, f) is not None)
+    if s.catalyst is not None or s.has_dated_catalyst is not None:
+        sourced += 1
+    return round(sourced / (len(_SCOREABLE_FIELDS) + 1), 2)
+
+
 def fable_score(s: SecuritySnapshot) -> FableResult:
     """Score a security. Gates are evaluated regardless of pillar scores."""
+    btr = s.base_total_return()
+    adj = _clamp(btr * 100.0, -5.0, 5.0) if btr is not None else 0.0
     return FableResult(
         ticker=s.ticker,
         fundamentals=score_fundamentals(s),
@@ -468,6 +538,9 @@ def fable_score(s: SecuritySnapshot) -> FableResult:
         behavior=score_behavior(s),
         longevity=score_longevity(s),
         entry=score_entry(s),
+        owner_yield_adj=round(adj, 1),
+        base_total_return=btr,
+        coverage=input_coverage(s),
         gates_tripped=check_gates(s),
     )
 
@@ -479,8 +552,8 @@ def kelly_fraction(score: float, annual_volatility: float = 0.30) -> float:
     above adds 40bp of estimated annual excess return, giving a 10%
     edge estimate at a perfect 80+ conviction. Continuous Kelly is
     f* = mu / sigma^2; we take a quarter of it (Thorp: estimation error
-    makes full Kelly overbetting) and cap at 15% of the book so no
-    single estimate can dominate. Below 60 the fraction is zero -
+    makes full Kelly overbetting) and cap by conviction tier (STARTER
+    8%, BUY 12%, STRONG 15%) so no single estimate can dominate. Below 60 the fraction is zero -
     Buffett's "no called strikes": pass is always available.
     """
     if score < 60:
@@ -488,7 +561,10 @@ def kelly_fraction(score: float, annual_volatility: float = 0.30) -> float:
     mu = (score - 55) * 0.004
     variance = max(annual_volatility, 0.05) ** 2
     f_star = mu / variance
-    return round(min(f_star / 4, 0.15), 4)
+    # v1.1: cap tiers by verdict so a low-volatility STARTER cannot reach
+    # the full position cap - conviction, not just variance, earns size.
+    cap = 0.08 if score < 70 else 0.12 if score < 80 else 0.15
+    return round(min(f_star / 4, cap), 4)
 
 
 def position_size(result: FableResult, book_value: float,
