@@ -17,6 +17,7 @@ from .fable_score import (
     validate_book,
     PORTFOLIO_RULES,
 )
+from . import methods
 
 __all__ = [
     "Catalyst",
@@ -29,4 +30,5 @@ __all__ = [
     "position_size",
     "validate_book",
     "PORTFOLIO_RULES",
+    "methods",
 ]

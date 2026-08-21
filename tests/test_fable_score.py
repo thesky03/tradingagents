@@ -311,3 +311,79 @@ def test_coverage_reported():
     partial = fable_score(SecuritySnapshot(ticker="P", roic=0.2, wacc=0.1,
                                            momentum_12_1_percentile=50.0))
     assert 0.0 < partial.coverage < 0.3
+
+
+# --- methods panel -----------------------------------------------------------
+
+
+from tradingagents.analytics import methods
+
+
+def _mini_universe():
+    return [
+        SecuritySnapshot(ticker="CHEAPGOOD", earnings_yield=0.09, roic=0.25,
+                         momentum_12_1_percentile=40, annual_volatility=0.25,
+                         revenue_cagr_3y=0.08, dividend_yield=0.02,
+                         buyback_yield=0.03, sbc_yield=0.003,
+                         valuation_percentile_vs_history=20.0,
+                         gross_profit_to_assets=0.4, wacc=0.08,
+                         fcf_to_net_income=1.0, gross_margin_stability=0.9,
+                         net_debt_to_ebitda=1.0, pct_off_52w_high=0.15,
+                         above_200dma=True),
+        SecuritySnapshot(ticker="HOTMOMO", earnings_yield=0.02, roic=0.15,
+                         momentum_12_1_percentile=95, annual_volatility=0.55,
+                         revenue_cagr_3y=0.30, sbc_yield=0.03,
+                         valuation_percentile_vs_history=90.0,
+                         gross_profit_to_assets=0.3, wacc=0.09,
+                         fcf_to_net_income=0.7, gross_margin_stability=0.6,
+                         net_debt_to_ebitda=0.5, pct_off_52w_high=0.02,
+                         above_200dma=True),
+        SecuritySnapshot(ticker="BROKENVAL", earnings_yield=0.11, roic=0.10,
+                         momentum_12_1_percentile=10, annual_volatility=0.30,
+                         revenue_cagr_3y=0.00, dividend_yield=0.05,
+                         buyback_yield=0.04, sbc_yield=0.002,
+                         valuation_percentile_vs_history=5.0,
+                         gross_profit_to_assets=0.2, wacc=0.08,
+                         fcf_to_net_income=0.9, gross_margin_stability=0.8,
+                         net_debt_to_ebitda=3.0, pct_off_52w_high=0.35,
+                         above_200dma=False),
+    ]
+
+
+def test_momentum_favors_hot_and_penalizes_broken_trend():
+    r = methods.momentum(_mini_universe())
+    assert r["HOTMOMO"] > r["CHEAPGOOD"] > r["BROKENVAL"]
+    # below-200dma haircut applied
+    assert r["BROKENVAL"] < 50
+
+
+def test_magic_formula_favors_cheap_and_good():
+    r = methods.magic_formula(_mini_universe())
+    assert r["CHEAPGOOD"] == max(r.values())
+
+
+def test_expected_return_decomposition():
+    u = _mini_universe()
+    er = {s.ticker: methods.expected_return(s) for s in u}
+    # CHEAPGOOD: btr 4.7% + growth 8% + cheap-multiple tailwind > 12%
+    assert er["CHEAPGOOD"] > 0.12
+    # HOTMOMO: -3% btr + 30% growth - rich-multiple drag, still high but lower than raw growth
+    assert 0.20 < er["HOTMOMO"] < 0.30
+
+
+def test_spearman_bounds_and_selfcorrelation():
+    u = _mini_universe()
+    m = methods.momentum(u)
+    assert methods.spearman(m, m) == 1.0
+    q = methods.quality(u)
+    rho = methods.spearman(m, q)
+    assert rho is None or -1.0 <= rho <= 1.0
+
+
+def test_consensus_weighted_average():
+    a = {"X": 100.0, "Y": 0.0}
+    b = {"X": 0.0, "Y": 100.0}
+    even = methods.consensus({"a": a, "b": b})
+    assert even["X"] == even["Y"] == 50.0
+    tilted = methods.consensus({"a": a, "b": b}, weights={"a": 3.0, "b": 1.0})
+    assert tilted["X"] == 75.0 and tilted["Y"] == 25.0
