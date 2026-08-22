@@ -229,3 +229,89 @@ def consensus(rankings: Dict[str, Dict[str, float]],
         if den:
             out[t] = round(num / den, 1)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Operator-directed methods (defined in-session under delegated judgment)
+# ---------------------------------------------------------------------------
+
+
+def aoq(s: SecuritySnapshot) -> Optional[float]:
+    """Asymmetry-of-Outcomes Quotient: upside per unit of modeled downside.
+
+    Definition (authored by the model at the operator's direction; the
+    operator named the method, the construction is this module's):
+
+        AOQ = (expected annual return + positive catalyst EV)
+              / (downside-if-wrong, scaled by volatility)
+
+    where expected annual return is the TSR decomposition from
+    ``expected_return`` (owner yield + growth +/- rerating drag), the
+    catalyst term counts only positive coin-flip EV, and the denominator
+    is the modeled loss if growth halves, scaled up for high-volatility
+    names (a 50% drawdown risked in a 0.5-vol name is a live scenario,
+    not a tail). Values: <1 poor shape, 1-2 acceptable, >2 attractive,
+    capped at 5 so one heroic denominator cannot dominate a ranking.
+
+    This scores payoff GEOMETRY where FABLE scores level; a mediocre
+    business at a bid-backstopped price can carry a better AOQ than a
+    great business priced for perfection.
+    """
+    er = expected_return(s)
+    if er is None or s.downside_loss_if_growth_halves is None:
+        return None
+    upside = max(er, 0.0)
+    if s.catalyst is not None:
+        ev = s.catalyst.expected_value()
+        if ev is not None and ev > 0:
+            upside += ev
+    vol_scale = 0.5 + (s.annual_volatility or 0.30)
+    downside = max(s.downside_loss_if_growth_halves * vol_scale, 0.08)
+    return round(min(upside / downside, 5.0), 3)
+
+
+def qii(s: SecuritySnapshot) -> Optional[float]:
+    """Quality-Improvement Index, 0-100: is the business getting BETTER?
+
+    Definition (authored by the model at the operator's direction).
+    FABLE's F and L pillars score the level of quality; QII scores its
+    first derivative - the inflections the market systematically
+    underprices (earnings-revision drift, Bernard-Thomas PEAD;
+    Piotroski's improvement signals). Components from a neutral 50:
+
+        margin trend        +/-12   (expanding vs contracting)
+        revision breadth    +/-15   (estimates moving up or down)
+        cash quality        +/-10   (FCF/NI vs a 0.85 par)
+        tape confirmation   +/- 8   (momentum agreeing with the story)
+        balance-sheet room  +/- 5   (headroom to keep improving)
+        capital allocation  +/- 5   (owner yield sign and size)
+
+    A high-QII/low-FABLE name is an inflection candidate; a low-QII/
+    high-FABLE name is a great business past its improvement phase.
+    """
+    known = 0
+    score = 50.0
+    if s.margin_trend is not None:
+        score += s.margin_trend * 12; known += 1
+    if s.estimate_revision_breadth is not None:
+        score += max(-1.0, min(1.0, s.estimate_revision_breadth)) * 15; known += 1
+    if s.fcf_to_net_income is not None:
+        score += max(-10.0, min(10.0, (s.fcf_to_net_income - 0.85) * 30)); known += 1
+    if s.momentum_12_1_percentile is not None:
+        score += (s.momentum_12_1_percentile - 50.0) / 50.0 * 8; known += 1
+    if s.net_debt_to_ebitda is not None:
+        score += max(-1.0, min(1.0, (2.0 - s.net_debt_to_ebitda) / 2.0)) * 5; known += 1
+    btr = s.base_total_return()
+    if btr is not None:
+        score += max(-5.0, min(5.0, btr * 100)); known += 1
+    if known == 0:
+        return None
+    return round(max(0.0, min(100.0, score)), 1)
+
+
+def aoq_ranks(universe: Sequence[SecuritySnapshot]) -> Dict[str, float]:
+    return _percentile_ranks(_collect(universe, aoq))
+
+
+def qii_ranks(universe: Sequence[SecuritySnapshot]) -> Dict[str, float]:
+    return _percentile_ranks(_collect(universe, qii))

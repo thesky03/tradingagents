@@ -387,3 +387,49 @@ def test_consensus_weighted_average():
     assert even["X"] == even["Y"] == 50.0
     tilted = methods.consensus({"a": a, "b": b}, weights={"a": 3.0, "b": 1.0})
     assert tilted["X"] == 75.0 and tilted["Y"] == 25.0
+
+
+# --- AOQ and QII (operator-directed methods) ---------------------------------
+
+
+def test_aoq_rewards_asymmetry_not_level():
+    base = dict(dividend_yield=0.0, buyback_yield=0.02, sbc_yield=0.0,
+                revenue_cagr_3y=0.10, valuation_percentile_vs_history=50.0,
+                annual_volatility=0.30)
+    tight = SecuritySnapshot(ticker="TIGHT", downside_loss_if_growth_halves=0.10, **base)
+    wide = SecuritySnapshot(ticker="WIDE", downside_loss_if_growth_halves=0.45, **base)
+    assert methods.aoq(tight) > methods.aoq(wide)
+    # positive catalyst EV improves the quotient; negative EV does not count
+    c_good = SecuritySnapshot(ticker="C", downside_loss_if_growth_halves=0.10,
+                              catalyst=Catalyst(payoff_if_hits=0.2, loss_if_misses=0.05), **base)
+    c_bad = SecuritySnapshot(ticker="C2", downside_loss_if_growth_halves=0.10,
+                             catalyst=Catalyst(payoff_if_hits=0.05, loss_if_misses=0.2), **base)
+    assert methods.aoq(c_good) > methods.aoq(tight)
+    assert methods.aoq(c_bad) == methods.aoq(tight)
+
+
+def test_aoq_volatility_scales_downside_and_caps():
+    base = dict(buyback_yield=0.05, revenue_cagr_3y=0.20,
+                valuation_percentile_vs_history=20.0,
+                downside_loss_if_growth_halves=0.10)
+    calm = SecuritySnapshot(ticker="CALM", annual_volatility=0.20, **base)
+    wild = SecuritySnapshot(ticker="WILD", annual_volatility=0.60, **base)
+    assert methods.aoq(calm) > methods.aoq(wild)
+    assert methods.aoq(calm) <= 5.0
+    assert methods.aoq(SecuritySnapshot(ticker="NONE")) is None
+
+
+def test_qii_scores_direction_of_change():
+    improving = SecuritySnapshot(ticker="UP", margin_trend=1,
+                                 estimate_revision_breadth=0.6,
+                                 fcf_to_net_income=1.1,
+                                 momentum_12_1_percentile=80.0,
+                                 net_debt_to_ebitda=0.5, buyback_yield=0.04)
+    deteriorating = SecuritySnapshot(ticker="DOWN", margin_trend=-1,
+                                     estimate_revision_breadth=-0.6,
+                                     fcf_to_net_income=0.5,
+                                     momentum_12_1_percentile=15.0,
+                                     net_debt_to_ebitda=3.5, sbc_yield=0.04)
+    up, down = methods.qii(improving), methods.qii(deteriorating)
+    assert up > 70 and down < 35 and 0 <= down < up <= 100
+    assert methods.qii(SecuritySnapshot(ticker="NONE")) is None
