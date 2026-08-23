@@ -433,3 +433,44 @@ def test_qii_scores_direction_of_change():
     up, down = methods.qii(improving), methods.qii(deteriorating)
     assert up > 70 and down < 35 and 0 <= down < up <= 100
     assert methods.qii(SecuritySnapshot(ticker="NONE")) is None
+
+
+# --- TRIAD composition --------------------------------------------------------
+
+
+def test_triad_gates_and_threshold_are_absolute():
+    d = methods.triad_decision(_quality_snapshot(
+        mania_exposure=True, dividend_yield=0.05, buyback_yield=0.10))
+    assert (d.own, d.size_fraction, d.signal) == (False, 0.0, "AVOID")
+    d2 = methods.triad_decision(SecuritySnapshot(ticker="EMPTY"))
+    assert not d2.own and d2.size_fraction == 0.0
+
+
+def test_triad_aoq_scales_size_but_respects_caps():
+    tight = methods.triad_decision(_quality_snapshot(
+        downside_loss_if_growth_halves=0.10, dividend_yield=0.02,
+        buyback_yield=0.05, revenue_cagr_3y=0.12))
+    wide = methods.triad_decision(_quality_snapshot(
+        downside_loss_if_growth_halves=0.45, sbc_yield=0.01))
+    assert tight.own and wide.own
+    assert tight.size_fraction >= wide.size_fraction
+    cap = 0.15 if tight.fable_total >= 80 else 0.12 if tight.fable_total >= 70 else 0.08
+    assert tight.size_fraction <= cap
+
+
+def test_triad_qii_sets_stance_not_ownership():
+    deteriorating = methods.triad_decision(_quality_snapshot(
+        margin_trend=-1, estimate_revision_breadth=-0.8,
+        momentum_12_1_percentile=30.0, fcf_to_net_income=0.6))
+    if deteriorating.own:
+        assert deteriorating.stance in ("HOLD", "NO_ADD")
+    improving = methods.triad_decision(_quality_snapshot(
+        dividend_yield=0.01, buyback_yield=0.04))
+    assert improving.own and improving.stance == "ACCUMULATE"
+
+
+def test_triad_wait_zeroes_size_but_keeps_ownership_verdict():
+    s = _quality_snapshot(has_defined_exit=False)
+    d = methods.triad_decision(s)
+    if d.own and d.signal == "WAIT":
+        assert d.size_fraction == 0.0

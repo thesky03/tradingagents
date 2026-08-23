@@ -315,3 +315,77 @@ def aoq_ranks(universe: Sequence[SecuritySnapshot]) -> Dict[str, float]:
 
 def qii_ranks(universe: Sequence[SecuritySnapshot]) -> Dict[str, float]:
     return _percentile_ranks(_collect(universe, qii))
+
+
+# ---------------------------------------------------------------------------
+# TRIAD: the composition of the three lenses into one decision
+# ---------------------------------------------------------------------------
+
+from dataclasses import dataclass, field as _field
+from .fable_score import (fable_score as _fable, entry_signal as _entry,
+                          kelly_fraction as _kelly)
+
+
+@dataclass
+class TriadDecision:
+    """One security, one complete decision: own / size / stance."""
+
+    ticker: str
+    own: bool                    # FABLE gates + threshold: may we own it at all?
+    signal: str                  # ENTER / WAIT / AVOID (entry discipline)
+    size_fraction: float         # of book, after AOQ shape scaling and caps
+    stance: str                  # ACCUMULATE / HOLD / NO_ADD (QII trajectory)
+    fable_total: float = 0.0
+    aoq_value: float = 0.0
+    qii_value: float = 0.0
+    rationale: List[str] = _field(default_factory=list)
+
+
+def triad_decision(s: SecuritySnapshot) -> TriadDecision:
+    """Compose FABLE-5 (level), AOQ (shape), and QII (trajectory).
+
+    Division of authority, in order:
+
+    1. FABLE decides OWNERSHIP. Gates and the 60 threshold are absolute;
+       neither a beautiful payoff shape nor a hot inflection can make a
+       forbidden or unworthy name ownable.
+    2. The entry discipline decides TIMING (ENTER / WAIT / AVOID),
+       unchanged - a broken tape still waits.
+    3. AOQ scales SIZE. Quarter-Kelly from the FABLE score is multiplied
+       by a shape factor - a >=2.0 quotient earns 1.25x, an ordinary
+       shape 1.0x, a poor one 0.75x, a bad one 0.5x - then re-capped at
+       the conviction-tier ceiling. Shape can shade a position up or
+       down; it cannot create one.
+    4. QII sets the STANCE on an owned name: >=65 ACCUMULATE (adds
+       allowed on weakness), 35-65 HOLD (keep, no adds), <35 NO_ADD
+       (deteriorating - trim into strength, never add). Trajectory
+       governs what you do NEXT, not what you already decided.
+    """
+    r = _fable(s)
+    a = aoq(s) or 0.0
+    q = qii(s)
+    q = 50.0 if q is None else q
+    why: List[str] = []
+
+    if r.gates_tripped or r.total < 60:
+        reason = (f"gates: {', '.join(r.gates_tripped)}" if r.gates_tripped
+                  else f"FABLE {r.total} below 60")
+        return TriadDecision(s.ticker, False, "AVOID", 0.0, "NO_ADD",
+                             r.total, a, q, [reason])
+
+    signal, notes = _entry(s, r)
+    why.extend(notes)
+
+    base = _kelly(r.total, s.annual_volatility)
+    shape = 1.25 if a >= 2.0 else 1.0 if a >= 1.2 else 0.75 if a >= 0.8 else 0.5
+    tier_cap = 0.08 if r.total < 70 else 0.12 if r.total < 80 else 0.15
+    size = round(min(base * shape, tier_cap), 4)
+    why.append(f"size: kelly {base:.1%} x shape {shape:.2f} (AOQ {a}) -> {size:.1%}")
+
+    stance = "ACCUMULATE" if q >= 65 else "HOLD" if q >= 35 else "NO_ADD"
+    why.append(f"stance: QII {q} -> {stance}")
+    if signal == "WAIT":
+        size = 0.0
+        why.append("entry WAIT: size deferred until the tape clears")
+
+    return TriadDecision(s.ticker, True, signal, size, stance, r.total, a, q, why)
