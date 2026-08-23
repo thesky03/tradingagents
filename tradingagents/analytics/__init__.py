@@ -18,6 +18,7 @@ from .fable_score import (
     PORTFOLIO_RULES,
 )
 from . import methods
+from .lifecycle import Action, PositionState, manage_position
 
 __all__ = [
     "Catalyst",
@@ -31,4 +32,7 @@ __all__ = [
     "validate_book",
     "PORTFOLIO_RULES",
     "methods",
+    "Action",
+    "PositionState",
+    "manage_position",
 ]

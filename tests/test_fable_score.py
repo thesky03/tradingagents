@@ -474,3 +474,85 @@ def test_triad_wait_zeroes_size_but_keeps_ownership_verdict():
     d = methods.triad_decision(s)
     if d.own and d.signal == "WAIT":
         assert d.size_fraction == 0.0
+
+
+# --- Lifecycle: manage_position ----------------------------------------------
+
+
+from tradingagents.analytics import PositionState, manage_position
+
+
+def _pos(**kw):
+    base = dict(ticker="TEST", entry_price=100.0, current_price=100.0,
+                days_held=90, entry_fable=75.0, entry_val_percentile=50.0,
+                adds_used=0, position_fraction=0.08)
+    base.update(kw)
+    return PositionState(**base)
+
+
+def test_stop_is_absolute_even_when_thesis_intact():
+    a = manage_position(_quality_snapshot(), _pos(current_price=74.0))
+    assert a.action == "SELL" and a.fraction == 1.0
+    assert any("stop" in r for r in a.rationale)
+
+
+def test_thesis_decay_sells_in_profit_too():
+    weak = _quality_snapshot(gross_profit_to_assets=0.05, roic=0.06,
+                             earnings_yield=0.02, momentum_12_1_percentile=20.0,
+                             moat_evidence_count=0, regime_fit=-1,
+                             estimate_revision_breadth=-0.5, margin_trend=-1,
+                             fcf_to_net_income=0.5, accruals_to_assets=0.08,
+                             gross_margin_stability=0.3, above_200dma=False,
+                             relative_strength_on_down_days=False,
+                             implied_growth=0.15, demonstrated_growth=0.05,
+                             downside_loss_if_growth_halves=0.45,
+                             valuation_percentile_vs_history=92.0, catalyst=None,
+                             reinvestment_runway=False, insider_alignment=False)
+    a = manage_position(weak, _pos(current_price=130.0))
+    assert a.action == "SELL"
+
+
+def test_quiet_period_holds():
+    a = manage_position(_quality_snapshot(), _pos(days_held=5, current_price=92.0))
+    assert a.action == "HOLD"
+    # but the stop still fires inside the quiet period
+    a2 = manage_position(_quality_snapshot(), _pos(days_held=5, current_price=70.0))
+    assert a2.action == "SELL"
+
+
+def test_eat_fact_driven_loss():
+    deteriorating = _quality_snapshot(margin_trend=-1, estimate_revision_breadth=-0.8,
+                                      fcf_to_net_income=0.5, momentum_12_1_percentile=25.0,
+                                      net_debt_to_ebitda=3.0, sbc_yield=0.03)
+    a = manage_position(deteriorating, _pos(current_price=85.0))
+    assert a.action == "SELL"
+    assert any("eat it" in r for r in a.rationale)
+
+
+def test_double_down_price_only_once():
+    s = _quality_snapshot(dividend_yield=0.01, buyback_yield=0.03)
+    a = manage_position(s, _pos(current_price=85.0, position_fraction=0.06))
+    assert a.action == "ADD" and 0 < a.fraction <= 0.50
+    # second add is refused
+    a2 = manage_position(s, _pos(current_price=85.0, adds_used=1, position_fraction=0.06))
+    assert a2.action == "HOLD"
+
+
+def test_harvest_blowoff_and_trim_granted_gain():
+    blow = _quality_snapshot(valuation_percentile_vs_history=95.0, pct_off_52w_high=0.01)
+    a = manage_position(blow, _pos(current_price=150.0))
+    assert a.action == "HARVEST" and a.fraction == 0.75
+    granted = _quality_snapshot(valuation_percentile_vs_history=80.0,
+                                estimate_revision_breadth=-0.2, margin_trend=0,
+                                momentum_12_1_percentile=55.0, buyback_yield=0.0,
+                                fcf_to_net_income=0.9)
+    a2 = manage_position(granted, _pos(current_price=135.0, entry_val_percentile=50.0))
+    assert a2.action == "TRIM" and a2.fraction in (0.33, 0.50)
+
+
+def test_earned_gain_rides():
+    earned = _quality_snapshot(valuation_percentile_vs_history=48.0,
+                               dividend_yield=0.01, buyback_yield=0.03)
+    a = manage_position(earned, _pos(current_price=140.0, entry_val_percentile=55.0))
+    assert a.action == "RIDE"
+    assert any("earned" in r for r in a.rationale)
