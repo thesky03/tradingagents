@@ -19,7 +19,8 @@ from .fable_score import (
 )
 from . import methods
 from .lifecycle import Action, PositionState, manage_position
-from .sky import SkyResult, sky_scores, cyclically_adjusted_earnings_yield
+from .sky import (SkyResult, sky_scores, cyclically_adjusted_earnings_yield,
+                  value_conviction_multiplier)
 from . import backtest
 
 __all__ = [
@@ -40,5 +41,6 @@ __all__ = [
     "SkyResult",
     "sky_scores",
     "cyclically_adjusted_earnings_yield",
+    "value_conviction_multiplier",
     "backtest",
 ]

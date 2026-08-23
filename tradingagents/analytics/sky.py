@@ -271,6 +271,41 @@ class SkyResult:
         return "PASS"
 
 
+def value_conviction_multiplier(s: SecuritySnapshot,
+                                qii_value: Optional[float]) -> float:
+    """Piotroski's discipline: inside the cheap bucket, separate the
+    improving from the deteriorating.
+
+    v2.3, motivated by the style-tilt loop. SKY's highest-scoring names
+    cluster in recent decliners - which is the value mechanism working,
+    and also exactly the population where value traps live. Cheapness
+    earned by a business that is getting worse is not margin of safety,
+    it is a discount that keeps widening.
+
+    Returns a multiplier applied ONLY to the cheapness lenses (dcf,
+    comps). Deterioration does not touch quality, moat, or firepower -
+    a temporarily struggling great business keeps its durability score.
+    A name with no QII reading is treated as neutral.
+
+    RETAINED ON PRIOR EVIDENCE, NOT ON OURS. The loop-7 check against
+    2026 trailing returns did not support this rule: the names it
+    discounts averaged +25.9% against +20.1% for the rest. That sample
+    was 8 names of trailing (not forward) return, so it has no real
+    power either way - but it is not confirmation, and calling it
+    confirmation would be dishonest. The rule stands because Piotroski
+    (2000) is among the best-replicated results in the literature, and
+    because it is deliberately mild (at most a 35% haircut, on 2 of 10
+    lenses). Revisit it the moment genuine forward returns exist.
+    """
+    if qii_value is None:
+        return 1.0
+    if qii_value >= 50.0:
+        return 1.0
+    if qii_value >= 35.0:
+        return 0.85
+    return 0.65
+
+
 def sky_scores(universe: Sequence[SecuritySnapshot]) -> Dict[str, SkyResult]:
     """Score a universe. Cross-sectional lenses need the whole set."""
     fab = {s.ticker: fable_score(s) for s in universe}
@@ -287,14 +322,17 @@ def sky_scores(universe: Sequence[SecuritySnapshot]) -> Dict[str, SkyResult]:
             continue
         a = methods.aoq(s)
         q = methods.qii(s)
+        vcm = value_conviction_multiplier(s, q)
+        _dcf = dcf_lens(s)
+        _comps = comps.get(t)
         lens: Dict[str, Optional[float]] = {
             "fable": r.total,                       # already 0-100
             "exp_ret": er_rank.get(t),
             "quality": qual.get(t),
-            "dcf": dcf_lens(s),
+            "dcf": None if _dcf is None else round(_dcf * vcm, 1),
             "firepower": firepower_lens(s),
             "lbo": lbo_lens(s),
-            "comps": comps.get(t),
+            "comps": None if _comps is None else round(_comps * vcm, 1),
             "qii": q,
             "precedents": precedents_lens(s),
             "aoq": None if a is None else _clamp(a * 40.0),   # 2.5 quotient -> 100

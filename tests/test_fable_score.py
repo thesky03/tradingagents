@@ -771,3 +771,33 @@ def test_firepower_leads_on_deployment_not_balance_sheet():
                                 dividend_yield=0.0, buyback_yield=0.0,
                                 sbc_yield=0.03, reinvestment_runway=False)
     assert firepower_lens(deployer) - firepower_lens(hoarder) > 30
+
+
+def test_value_conviction_multiplier_tiers():
+    from tradingagents.analytics import value_conviction_multiplier as vcm
+    s = _quality_snapshot()
+    assert vcm(s, None) == 1.0        # unknown trajectory is neutral
+    assert vcm(s, 70.0) == 1.0        # improving: full credit for cheapness
+    assert vcm(s, 40.0) == 0.85       # drifting: discounted
+    assert vcm(s, 20.0) == 0.65       # deteriorating: cheapness distrusted
+
+
+def test_value_trap_discount_hits_cheapness_not_durability():
+    """A cheap deteriorating name loses value-lens credit; a cheap
+    improving name keeps it. Quality/firepower are untouched either way."""
+    common = dict(earnings_yield=0.11, gross_margin_stability=0.85,
+                  net_debt_to_ebitda=1.0, fcf_to_net_income=1.0,
+                  peer_group="p", moat_evidence_count=3, wacc=0.09,
+                  revenue_cagr_3y=0.04, buyback_yield=0.02)
+    improving = [SecuritySnapshot(ticker=f"UP{i}", margin_trend=1,
+                                  estimate_revision_breadth=0.6,
+                                  momentum_12_1_percentile=70.0, **common)
+                 for i in range(4)]
+    falling = [SecuritySnapshot(ticker=f"DN{i}", margin_trend=-1,
+                                estimate_revision_breadth=-0.8,
+                                momentum_12_1_percentile=15.0, **common)
+               for i in range(4)]
+    res = sky_scores(improving + falling)
+    assert res["UP0"].components["dcf"] > res["DN0"].components["dcf"]
+    # durability lenses see the same balance sheet, so they must not move
+    assert res["UP0"].components["firepower"] == res["DN0"].components["firepower"]
