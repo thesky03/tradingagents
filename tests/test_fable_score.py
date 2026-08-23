@@ -556,3 +556,55 @@ def test_earned_gain_rides():
     a = manage_position(earned, _pos(current_price=140.0, entry_val_percentile=55.0))
     assert a.action == "RIDE"
     assert any("earned" in r for r in a.rationale)
+
+
+# --- SKY composite -------------------------------------------------------------
+
+
+from tradingagents.analytics import sky_scores
+from tradingagents.analytics.sky import dcf_lens, lbo_lens, firepower_lens, precedents_lens
+
+
+def test_sky_bounds_verdicts_and_gate_zero():
+    u = [_quality_snapshot(ticker="GOOD", dividend_yield=0.02, buyback_yield=0.03),
+         _quality_snapshot(ticker="GATED", mania_exposure=True),
+         SecuritySnapshot(ticker="EMPTY")]
+    res = sky_scores(u)
+    assert 0 <= res["GOOD"].total <= 100 and res["GOOD"].verdict in (
+        "GENERATIONAL", "CORE", "ACCUMULATE", "WATCH", "PASS")
+    assert res["GATED"].total == 0.0 and res["GATED"].verdict.startswith("VETO")
+    assert res["EMPTY"].coverage < res["GOOD"].coverage
+
+
+def test_dcf_lens_monotone_in_cheapness():
+    cheap = dcf_lens(_quality_snapshot(earnings_yield=0.10))
+    rich = dcf_lens(_quality_snapshot(earnings_yield=0.03))
+    assert cheap > rich
+    assert dcf_lens(SecuritySnapshot(ticker="X")) is None
+
+
+def test_lbo_lens_floor_logic():
+    lbo_able = lbo_lens(_quality_snapshot(earnings_yield=0.09, fcf_to_net_income=1.0,
+                                          net_debt_to_ebitda=0.5, gross_margin_stability=0.9))
+    fragile = lbo_lens(_quality_snapshot(earnings_yield=0.03, fcf_to_net_income=0.6,
+                                         net_debt_to_ebitda=4.0, gross_margin_stability=0.3))
+    assert lbo_able > fragile
+    assert lbo_lens(_quality_snapshot(is_financial=True)) is None
+    assert lbo_lens(_quality_snapshot(is_regulated_utility=True)) is None
+
+
+def test_precedents_lens_mania_scores_zero():
+    assert precedents_lens(_quality_snapshot(mania_exposure=True)) == 0.0
+    scarce_cheap = precedents_lens(_quality_snapshot(
+        moat_evidence_count=4, valuation_percentile_vs_history=15.0))
+    common_rich = precedents_lens(_quality_snapshot(
+        moat_evidence_count=1, valuation_percentile_vs_history=90.0))
+    assert scarce_cheap > common_rich
+
+
+def test_firepower_rewards_dry_powder_and_will():
+    loaded = firepower_lens(_quality_snapshot(net_debt_to_ebitda=-0.5,
+                                              buyback_yield=0.06, dividend_yield=0.02))
+    spent = firepower_lens(_quality_snapshot(net_debt_to_ebitda=2.9,
+                                             sbc_yield=0.03, buyback_yield=0.0))
+    assert loaded > spent

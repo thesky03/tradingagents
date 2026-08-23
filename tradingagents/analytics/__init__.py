@@ -19,6 +19,7 @@ from .fable_score import (
 )
 from . import methods
 from .lifecycle import Action, PositionState, manage_position
+from .sky import SkyResult, sky_scores
 
 __all__ = [
     "Catalyst",
@@ -35,4 +36,6 @@ __all__ = [
     "Action",
     "PositionState",
     "manage_position",
+    "SkyResult",
+    "sky_scores",
 ]
