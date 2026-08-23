@@ -608,3 +608,166 @@ def test_firepower_rewards_dry_powder_and_will():
     spent = firepower_lens(_quality_snapshot(net_debt_to_ebitda=2.9,
                                              sbc_yield=0.03, buyback_yield=0.0))
     assert loaded > spent
+
+
+# --- Backtest harness ---------------------------------------------------------
+
+
+import random as _random
+from tradingagents.analytics import backtest as bt
+
+
+def _mini_scoring_universe(n=30):
+    rng = _random.Random(3)
+    u = []
+    for i in range(n):
+        u.append(SecuritySnapshot(
+            ticker=f"T{i:02d}",
+            gross_profit_to_assets=rng.uniform(0.05, 0.5),
+            roic=rng.uniform(0.04, 0.30), wacc=0.085,
+            fcf_to_net_income=rng.uniform(0.4, 1.2),
+            accruals_to_assets=rng.uniform(0.0, 0.08),
+            margin_trend=rng.choice((-1, 0, 1)),
+            revenue_cagr_3y=rng.uniform(-0.02, 0.35),
+            earnings_yield=rng.uniform(0.01, 0.11), treasury_10y_yield=0.047,
+            valuation_percentile_vs_history=rng.uniform(5, 95),
+            implied_growth=rng.uniform(0.0, 0.25),
+            demonstrated_growth=rng.uniform(0.0, 0.3),
+            downside_loss_if_growth_halves=rng.uniform(0.12, 0.5),
+            momentum_12_1_percentile=rng.uniform(0, 100),
+            above_200dma=rng.random() > 0.3,
+            gross_margin_stability=rng.uniform(0.3, 0.98),
+            moat_evidence_count=rng.randint(0, 4),
+            net_debt_to_ebitda=rng.uniform(-0.5, 3.5),
+            interest_coverage=rng.uniform(3, 25),
+            reinvestment_runway=rng.random() > 0.4,
+            regime_fit=rng.choice((-1, 0, 1)),
+            pct_off_52w_high=rng.uniform(0.0, 0.4),
+            has_defined_exit=True, adequately_liquid=True,
+            dividend_yield=rng.uniform(0, 0.05),
+            buyback_yield=rng.uniform(0, 0.07),
+            sbc_yield=rng.uniform(0, 0.04),
+            annual_volatility=rng.uniform(0.18, 0.55),
+        ))
+    return u
+
+
+def _sky_scorer(u):
+    return {t: r.total for t, r in sky_scores(u).items()}
+
+
+def test_structural_only_blanks_price_fields():
+    s = _quality_snapshot()
+    st = bt.structural_only(s)
+    for f in bt.PRICE_DERIVED_FIELDS:
+        assert getattr(st, f) is None
+    # business characteristics survive
+    assert st.gross_profit_to_assets == s.gross_profit_to_assets
+    assert st.net_debt_to_ebitda == s.net_debt_to_ebitda
+
+
+def test_perturb_moves_inputs_but_preserves_identity():
+    rng = _random.Random(1)
+    s = _quality_snapshot()
+    p = bt.perturb(s, rng)
+    assert p.ticker == s.ticker
+    assert p.roic != s.roic
+    # zero magnitude is (almost) a no-op on percentile fields' bounds
+    p0 = bt.perturb(s, _random.Random(1), magnitude=0.0)
+    assert p0.momentum_12_1_percentile == s.momentum_12_1_percentile
+
+
+def test_rank_stability_reports_overlap_in_bounds():
+    u = _mini_scoring_universe()
+    res = bt.rank_stability(u, _sky_scorer, top_k=10, trials=15)
+    assert 0.0 <= res["mean_topk_overlap"] <= 1.0
+    assert -1.0 <= res["mean_rank_corr"] <= 1.0
+    assert len(res["retention"]) == 10
+
+
+def test_effective_independent_weight_groups_correlated_lenses():
+    a = {f"T{i}": float(i) for i in range(20)}
+    b = {f"T{i}": float(i) + 0.01 for i in range(20)}      # ~identical to a
+    c = {f"T{i}": float(20 - i) for i in range(20)}        # inverted
+    blocs = bt.effective_independent_weight(
+        {"a": a, "b": b, "c": c}, {"a": 0.2, "b": 0.2, "c": 0.2})
+    assert any("+" in k and abs(v - 0.4) < 1e-9 for k, v in blocs.items())
+
+
+def test_information_coefficient_and_deciles():
+    scores = {f"T{i}": float(i) for i in range(20)}
+    rets = {f"T{i}": float(i) * 0.01 for i in range(20)}   # perfectly aligned
+    ic = bt.information_coefficient(scores, rets)
+    assert ic["ic"] == pytest.approx(1.0) and ic["n"] == 20
+    assert bt.information_coefficient({"A": 1.0}, {"A": 0.1}) is None
+    rows = bt.decile_table(scores, rets, buckets=4)
+    assert len(rows) == 4
+    assert rows[0]["mean_return"] < rows[-1]["mean_return"]
+
+
+def test_regime_stress_returns_overlap_per_scenario():
+    u = _mini_scoring_universe(20)
+    res = bt.regime_stress(u, _sky_scorer,
+                           {"rates_6pct": {"treasury_10y_yield": 0.06}}, top_k=8)
+    assert 0.0 <= res["rates_6pct"]["topk_overlap"] <= 1.0
+
+
+# --- v2 refinements -----------------------------------------------------------
+
+
+from tradingagents.analytics import cyclically_adjusted_earnings_yield as caey
+from tradingagents.analytics.sky import comps_lens
+
+
+def test_caey_haircuts_unstable_earnings():
+    stable = _quality_snapshot(earnings_yield=0.08, gross_margin_stability=1.0)
+    cyclical = _quality_snapshot(earnings_yield=0.08, gross_margin_stability=0.35)
+    assert caey(stable) == pytest.approx(0.08)
+    assert caey(cyclical) < caey(stable)
+    assert caey(SecuritySnapshot(ticker="X")) is None
+
+
+def test_lbo_lens_no_longer_reads_cheapness():
+    """v2: identical balance sheets must score identically regardless of price."""
+    from tradingagents.analytics.sky import lbo_lens
+    cheap = _quality_snapshot(earnings_yield=0.12, net_debt_to_ebitda=1.0,
+                              fcf_to_net_income=1.0, gross_margin_stability=0.9)
+    rich = _quality_snapshot(earnings_yield=0.02, net_debt_to_ebitda=1.0,
+                             fcf_to_net_income=1.0, gross_margin_stability=0.9)
+    assert lbo_lens(cheap) == lbo_lens(rich)
+
+
+def test_comps_lens_is_peer_relative():
+    """A cheap name in an expensive peer group beats a cheap name among peers."""
+    rich_peers = [_quality_snapshot(ticker=f"R{i}", peer_group="rich",
+                                    earnings_yield=0.02, gross_margin_stability=0.9)
+                  for i in range(4)]
+    cheap_peers = [_quality_snapshot(ticker=f"C{i}", peer_group="cheap",
+                                     earnings_yield=0.10, gross_margin_stability=0.9)
+                   for i in range(4)]
+    standout = _quality_snapshot(ticker="STANDOUT", peer_group="rich",
+                                 earnings_yield=0.06, gross_margin_stability=0.9)
+    laggard = _quality_snapshot(ticker="LAGGARD", peer_group="cheap",
+                                earnings_yield=0.06, gross_margin_stability=0.9)
+    res = comps_lens(rich_peers + cheap_peers + [standout, laggard])
+    # same absolute yield, opposite peer context -> opposite scores
+    assert res["STANDOUT"] > res["LAGGARD"]
+
+
+def test_generational_requires_coverage():
+    from tradingagents.analytics import SkyResult
+    thin = SkyResult("X", 85.0, coverage=0.60)
+    full = SkyResult("Y", 85.0, coverage=1.0)
+    assert thin.verdict == "CORE" and full.verdict == "GENERATIONAL"
+
+
+def test_firepower_leads_on_deployment_not_balance_sheet():
+    """v2.2: same balance sheet, different capital allocation -> different score."""
+    from tradingagents.analytics.sky import firepower_lens
+    deployer = _quality_snapshot(net_debt_to_ebitda=1.0, fcf_to_net_income=1.0,
+                                 dividend_yield=0.02, buyback_yield=0.05,
+                                 sbc_yield=0.003, reinvestment_runway=True)
+    hoarder = _quality_snapshot(net_debt_to_ebitda=1.0, fcf_to_net_income=1.0,
+                                dividend_yield=0.0, buyback_yield=0.0,
+                                sbc_yield=0.03, reinvestment_runway=False)
+    assert firepower_lens(deployer) - firepower_lens(hoarder) > 30

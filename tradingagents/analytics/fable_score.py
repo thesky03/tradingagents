@@ -100,6 +100,10 @@ class SecuritySnapshot:
     """
 
     ticker: str = ""
+    #: Peer set for comparables analysis (sector / archetype label). When
+    #: present, the comps lens ranks a name against ITS PEERS rather than
+    #: the whole universe - which is what a comps table actually is.
+    peer_group: Optional[str] = None
 
     # --- F: Fundamentals ---
     gross_profit_to_assets: Optional[float] = None   # Novy-Marx GP/A

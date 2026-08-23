@@ -48,19 +48,43 @@ from . import methods
 
 # 2026 sponsor-market calibration (see module docstring for sources).
 LBO_LEVERAGE_TURNS = 5.25      # midpoint of 5.0-5.5x available leverage
-LBO_FCF_YIELD_PAR = 0.08       # unlevered FCF/EV yield that clears ~20% IRR
 FIREPOWER_ND_CAP = 3.0         # EY's ~30% D/E spirit mapped to ND/EBITDA turns
 
+
+def cyclically_adjusted_earnings_yield(s: SecuritySnapshot) -> Optional[float]:
+    """Earnings yield haircut by how trustworthy the earnings are.
+
+    Graham's ten-year average and Shiller's CAPE exist because a single
+    year's earnings mislead most exactly when they look best: at the
+    cycle peak. Without an earnings history per name, gross-margin
+    stability is the available proxy for how much of current earnings
+    is durable. A rock-stable business keeps its full yield; a 0.35-
+    stability memory maker keeps ~68% of it.
+
+    Introduced in v2 after the backtest loops traced an 8-of-25
+    deep-cyclical concentration in the top ranks to raw earnings yield
+    feeding three lenses at once.
+    """
+    if s.earnings_yield is None:
+        return None
+    stab = s.gross_margin_stability if s.gross_margin_stability is not None else 0.75
+    return s.earnings_yield * (0.5 + 0.5 * stab)
+
+# v2 weights. The value bloc (dcf+comps+lbo) fell 26% -> 21% after the
+# redundancy loop measured comps x lbo at rho 0.88 and comps x dcf at
+# 0.71 - one cheapness factor collecting three weights. The freed
+# weight went to quality, the least redundant lens and the one most
+# aligned with a decade-long hold.
 WEIGHTS = {
     "fable": 0.22,      # level of the business + margin of safety + gates
-    "exp_ret": 0.15,    # TSR decomposition: what the hold actually earns
-    "quality": 0.12,    # AQR-style durability
-    "dcf": 0.12,        # intrinsic-value gap
+    "exp_ret": 0.16,    # TSR decomposition: what the hold actually earns
+    "quality": 0.15,    # AQR-style durability (v1: 0.12)
+    "dcf": 0.10,        # intrinsic-value gap, cyclically adjusted (v1: 0.12)
     "firepower": 0.10,  # capacity to keep compounding through cycles
-    "lbo": 0.08,        # financial-buyer floor under the equity
-    "comps": 0.06,      # relative value, cross-sectional and historical
+    "lbo": 0.06,        # financeability, not cheapness (v1: 0.08)
+    "comps": 0.05,      # purely cross-sectional relative value (v1: 0.06)
     "qii": 0.06,        # trajectory (small: decade holds outlive quarters)
-    "precedents": 0.05, # scarcity / strategic value
+    "precedents": 0.06, # scarcity / strategic value
     "aoq": 0.04,        # payoff shape (mostly an entry concern)
 }
 
@@ -84,11 +108,12 @@ def dcf_lens(s: SecuritySnapshot) -> Optional[float]:
     An expectations kicker (Mauboussin): implied growth already below
     75% of demonstrated growth adds a notch.
     """
-    if s.earnings_yield is None or s.wacc is None:
+    caey = cyclically_adjusted_earnings_yield(s)
+    if caey is None or s.wacc is None:
         return None
     g_sustain = min(s.revenue_cagr_3y if s.revenue_cagr_3y is not None else 0.03, 0.05)
     fair_ey = max(s.wacc - g_sustain, 0.02)
-    gap = s.earnings_yield / fair_ey
+    gap = caey / fair_ey
     score = 50.0 + (gap - 1.0) * 50.0
     if (s.implied_growth is not None and s.demonstrated_growth is not None
             and s.implied_growth <= 0.75 * s.demonstrated_growth):
@@ -108,13 +133,18 @@ def lbo_lens(s: SecuritySnapshot) -> Optional[float]:
     """
     if s.is_financial or s.is_regulated_utility:
         return None
-    if s.earnings_yield is None or s.fcf_to_net_income is None:
+    if s.net_debt_to_ebitda is None and s.fcf_to_net_income is None:
         return None
-    fcf_yield = s.earnings_yield * s.fcf_to_net_income
-    score = 50.0 * min(fcf_yield / LBO_FCF_YIELD_PAR, 1.6)
+    # v2: the earnings-yield term was removed - it duplicated the DCF and
+    # comps lenses (measured rho 0.68 and 0.88). This lens now answers only
+    # "can this balance sheet and cash flow CARRY sponsor leverage", which
+    # is the part no other lens measures.
+    score = 0.0
     if s.net_debt_to_ebitda is not None:
         headroom = max(LBO_LEVERAGE_TURNS - max(s.net_debt_to_ebitda, 0.0), 0.0)
-        score += 25.0 * min(headroom / LBO_LEVERAGE_TURNS, 1.0)
+        score += 45.0 * min(headroom / LBO_LEVERAGE_TURNS, 1.0)
+    if s.fcf_to_net_income is not None:
+        score += 30.0 * min(s.fcf_to_net_income / 1.0, 1.2)
     if s.gross_margin_stability is not None:
         score += 25.0 * s.gross_margin_stability
     return round(_clamp(score), 1)
@@ -127,15 +157,27 @@ def comps_lens(universe: Sequence[SecuritySnapshot]) -> Dict[str, float]:
     inverted own-history valuation percentile, and EV/EBIT vs sector
     median where sourced. Equal-weighted across whatever is available.
     """
-    ey_rank = methods._percentile_ranks(
-        methods._collect(universe, lambda s: s.earnings_yield))
+    # v2.1: ranked WITHIN peer group, not across the whole universe. A
+    # comps table compares a refiner to refiners. Universe-wide ranking
+    # made this lens a second copy of the DCF lens (measured rho +0.78);
+    # peer-relative ranking asks the different question - cheap versus
+    # the businesses it actually competes with - and drops that overlap.
+    groups: Dict[str, List[SecuritySnapshot]] = {}
+    for sec in universe:
+        groups.setdefault(sec.peer_group or "_all", []).append(sec)
+    ey_rank: Dict[str, float] = {}
+    for label, members in groups.items():
+        # A peer set of one or two says nothing; fall back to the universe.
+        pool = members if len(members) >= 4 else list(universe)
+        ey_rank.update({
+            t: v for t, v in methods._percentile_ranks(
+                methods._collect(pool, cyclically_adjusted_earnings_yield)).items()
+            if any(m.ticker == t for m in members)})
     out: Dict[str, float] = {}
     for s in universe:
         parts: List[float] = []
         if s.ticker in ey_rank:
             parts.append(ey_rank[s.ticker])
-        if s.valuation_percentile_vs_history is not None:
-            parts.append(100.0 - s.valuation_percentile_vs_history)
         if s.ev_ebit is not None and s.sector_median_ev_ebit:
             rel = (s.sector_median_ev_ebit - s.ev_ebit) / s.sector_median_ev_ebit
             parts.append(_clamp(50.0 + rel * 100.0))
@@ -174,23 +216,29 @@ def firepower_lens(s: SecuritySnapshot) -> Optional[float]:
     WILL to deploy (owner yield) and somewhere to deploy INTO
     (reinvestment runway).
     """
+    # v2.2: the balance-sheet terms were cut (0.35 -> 0.15 leverage, 0.25 ->
+    # 0.10 conversion) because they duplicated the LBO lens at rho +0.81.
+    # Firepower now leads with what only it measures: the DEMONSTRATED WILL
+    # to deploy (owner yield) and somewhere worth deploying into (runway).
+    # LBO asks whether a buyer could carry the debt; firepower asks whether
+    # this management actually turns capacity into per-share value.
     parts: List[float] = []
     if s.net_debt_to_ebitda is not None:
         parts.append(_clamp((FIREPOWER_ND_CAP - s.net_debt_to_ebitda)
-                            / FIREPOWER_ND_CAP * 100.0) * 0.35)
+                            / FIREPOWER_ND_CAP * 100.0) * 0.15)
     if s.fcf_to_net_income is not None:
-        parts.append(_clamp(s.fcf_to_net_income * 80.0) * 0.25)
+        parts.append(_clamp(s.fcf_to_net_income * 80.0) * 0.10)
     btr = s.base_total_return()
     if btr is not None:
-        parts.append(_clamp(50.0 + btr * 500.0) * 0.25)
+        parts.append(_clamp(50.0 + btr * 500.0) * 0.45)
     if s.reinvestment_runway is not None:
-        parts.append((100.0 if s.reinvestment_runway else 30.0) * 0.15)
+        parts.append((100.0 if s.reinvestment_runway else 30.0) * 0.30)
     if not parts:
         return None
-    weight_used = (0.35 * (s.net_debt_to_ebitda is not None)
-                   + 0.25 * (s.fcf_to_net_income is not None)
-                   + 0.25 * (btr is not None)
-                   + 0.15 * (s.reinvestment_runway is not None))
+    weight_used = (0.15 * (s.net_debt_to_ebitda is not None)
+                   + 0.10 * (s.fcf_to_net_income is not None)
+                   + 0.45 * (btr is not None)
+                   + 0.30 * (s.reinvestment_runway is not None))
     return round(_clamp(sum(parts) / weight_used), 1)
 
 
@@ -212,7 +260,11 @@ class SkyResult:
         if self.gates_tripped:
             return f"VETO ({', '.join(self.gates_tripped)})"
         t = self.total
-        if t >= 80: return "GENERATIONAL"
+        # v2: the noise loop showed only three names held the top tier in
+        # every Monte Carlo trial. GENERATIONAL now requires the data to
+        # back the claim, not just the arithmetic.
+        if t >= 80 and self.coverage >= 0.90: return "GENERATIONAL"
+        if t >= 80: return "CORE"
         if t >= 70: return "CORE"
         if t >= 60: return "ACCUMULATE"
         if t >= 50: return "WATCH"
