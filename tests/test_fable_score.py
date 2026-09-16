@@ -844,3 +844,60 @@ def test_rate_lens_makes_sky_respond_to_the_discount_rate():
 def replace_rate(s, y):
     from dataclasses import replace
     return replace(s, treasury_10y_yield=y)
+
+
+# --- Horizon simulation -------------------------------------------------------
+
+
+from tradingagents.analytics import simulate_horizon, rank_by_odds
+
+
+def test_horizon_requires_owner_yield_inputs():
+    assert simulate_horizon(SecuritySnapshot(ticker="X")) is None
+
+
+def test_bankable_return_is_owner_yield_compounded():
+    s = _quality_snapshot(dividend_yield=0.02, buyback_yield=0.06, sbc_yield=0.01)
+    r = simulate_horizon(s, years=3, trials=2000)
+    assert r.bankable_return == pytest.approx((1.07 ** 3) - 1, abs=1e-3)
+
+
+def test_higher_owner_yield_raises_odds_and_bankable_share():
+    common = dict(revenue_cagr_3y=0.06, demonstrated_growth=0.06,
+                  valuation_percentile_vs_history=50.0)
+    rich = simulate_horizon(_quality_snapshot(
+        dividend_yield=0.02, buyback_yield=0.07, sbc_yield=0.005, **common),
+        years=3, trials=6000)
+    thin = simulate_horizon(_quality_snapshot(
+        dividend_yield=0.0, buyback_yield=0.0, sbc_yield=0.03, **common),
+        years=3, trials=6000)
+    assert rich.p_hit > thin.p_hit
+    assert rich.bankable_share > thin.bankable_share
+
+
+def test_cheap_name_gets_rerating_tailwind_expensive_gets_drag():
+    cheap = simulate_horizon(_quality_snapshot(
+        valuation_percentile_vs_history=15.0, buyback_yield=0.03), trials=1500)
+    rich = simulate_horizon(_quality_snapshot(
+        valuation_percentile_vs_history=92.0, buyback_yield=0.03), trials=1500)
+    assert cheap.expected_multiple_change > 0 > rich.expected_multiple_change
+
+
+def test_leverage_and_deterioration_raise_impairment():
+    safe = simulate_horizon(_quality_snapshot(
+        net_debt_to_ebitda=0.5, margin_trend=1, buyback_yield=0.03), trials=1500)
+    risky = simulate_horizon(_quality_snapshot(
+        net_debt_to_ebitda=4.0, margin_trend=-1, moat_evidence_count=0,
+        is_financial=True, buyback_yield=0.03), trials=1500)
+    assert risky.inputs["impairment_pa"] > safe.inputs["impairment_pa"]
+    assert risky.p_loss > safe.p_loss
+
+
+def test_rank_by_odds_excludes_gated_and_sorts():
+    u = [_quality_snapshot(ticker="A", buyback_yield=0.08, peer_group="p"),
+         _quality_snapshot(ticker="B", buyback_yield=0.01, peer_group="p"),
+         _quality_snapshot(ticker="GATED", mania_exposure=True,
+                           buyback_yield=0.09, peer_group="p")]
+    res = rank_by_odds(u, trials=1500)
+    assert [r.ticker for r in res] == ["A", "B"]
+    assert res[0].p_hit >= res[1].p_hit

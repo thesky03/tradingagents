@@ -23,6 +23,7 @@ from .sky import (SkyResult, sky_scores, cyclically_adjusted_earnings_yield,
                   value_conviction_multiplier, rate_pressure_lens,
                   equity_duration)
 from . import backtest
+from .horizon import HorizonResult, simulate_horizon, rank_by_odds
 
 __all__ = [
     "Catalyst",
@@ -46,4 +47,7 @@ __all__ = [
     "rate_pressure_lens",
     "equity_duration",
     "backtest",
+    "HorizonResult",
+    "simulate_horizon",
+    "rank_by_odds",
 ]
