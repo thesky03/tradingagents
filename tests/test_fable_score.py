@@ -801,3 +801,46 @@ def test_value_trap_discount_hits_cheapness_not_durability():
     assert res["UP0"].components["dcf"] > res["DN0"].components["dcf"]
     # durability lenses see the same balance sheet, so they must not move
     assert res["UP0"].components["firepower"] == res["DN0"].components["firepower"]
+
+
+# --- v3 rate-pressure lens ----------------------------------------------------
+
+
+from tradingagents.analytics import rate_pressure_lens, equity_duration
+
+
+def test_equity_duration_tracks_multiple():
+    assert equity_duration(_quality_snapshot(earnings_yield=0.10)) == pytest.approx(10.0)
+    assert equity_duration(_quality_snapshot(earnings_yield=0.02)) == pytest.approx(50.0)
+    assert equity_duration(_quality_snapshot(earnings_yield=0.005)) == 60.0  # capped
+    assert equity_duration(SecuritySnapshot(ticker="X")) is None
+
+
+def test_rate_pressure_penalises_long_duration_when_rates_rise():
+    short = dict(earnings_yield=0.10)   # ~10x
+    long_ = dict(earnings_yield=0.025)  # ~40x
+    high = 0.050
+    assert (rate_pressure_lens(_quality_snapshot(treasury_10y_yield=high, **long_))
+            < rate_pressure_lens(_quality_snapshot(treasury_10y_yield=high, **short)))
+    # falling rates reverse the ordering's harm: long duration benefits more
+    low = 0.030
+    assert (rate_pressure_lens(_quality_snapshot(treasury_10y_yield=low, **long_))
+            > rate_pressure_lens(_quality_snapshot(treasury_10y_yield=low, **short)))
+
+
+def test_rate_lens_makes_sky_respond_to_the_discount_rate():
+    """The v2 failure: a 33bp move changed the ranking by rho 1.0000."""
+    u = [_quality_snapshot(ticker="LONG", earnings_yield=0.025, peer_group="p"),
+         _quality_snapshot(ticker="SHORT", earnings_yield=0.10, peer_group="p"),
+         _quality_snapshot(ticker="MID", earnings_yield=0.05, peer_group="p")]
+    at_47 = sky_scores([replace_rate(s, 0.047) for s in u])
+    at_50 = sky_scores([replace_rate(s, 0.050) for s in u])
+    long_delta = at_50["LONG"].total - at_47["LONG"].total
+    short_delta = at_50["SHORT"].total - at_47["SHORT"].total
+    assert long_delta < short_delta          # long duration hurt more
+    assert abs(long_delta) > 0.2             # and it actually moves
+
+
+def replace_rate(s, y):
+    from dataclasses import replace
+    return replace(s, treasury_10y_yield=y)

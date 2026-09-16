@@ -51,6 +51,54 @@ LBO_LEVERAGE_TURNS = 5.25      # midpoint of 5.0-5.5x available leverage
 FIREPOWER_ND_CAP = 3.0         # EY's ~30% D/E spirit mapped to ND/EBITDA turns
 
 
+#: The 10-year yield the rest of the weights were calibrated against.
+#: Deviations from it drive the rate-pressure lens.
+RATE_NEUTRAL_10Y = 0.042
+
+
+def equity_duration(s: SecuritySnapshot) -> Optional[float]:
+    """Crude equity duration in years: how distant are the cash flows?
+
+    A high multiple IS long duration - most of the value sits in the
+    out-years. P/E is the available proxy; capped at 60 because past
+    that the estimate is noise, not information.
+    """
+    if s.earnings_yield is None or s.earnings_yield <= 0:
+        return None
+    return min(1.0 / s.earnings_yield, 60.0)
+
+
+def rate_pressure_lens(s: SecuritySnapshot) -> Optional[float]:
+    """What the prevailing risk-free rate does to this name's valuation.
+
+    Added in v3 after a failed out-of-sample test. SKY carried no
+    discount-rate channel at all: moving the 10-year from 4.70% to
+    5.00% - the actual September 2026 move, to a 19-year high - changed
+    its cross-sectional ranking by a Spearman correlation of 1.0000 and
+    0.047 points per name. A score claiming a decade horizon cannot be
+    indifferent to the rate those decades are discounted at.
+
+    The mechanism is arithmetic, not a fitted pattern: the present value
+    of distant cash flows falls roughly in proportion to duration times
+    the change in yield. Scored 50 at the neutral anchor, below it when
+    rates are above and the name is long-duration, above it when rates
+    fall or the name is short-duration.
+
+    HONEST LIMIT: this would NOT have rescued the September test. The
+    long-duration names there outperformed (NVDA at ~29x rose 26% on an
+    earnings beat while ADBE at ~10x fell) because idiosyncratic
+    surprises swamped the rate effect across 17 names in 27 days. It is
+    here because the mechanism is real over a decade, not because it
+    fixes a month.
+    """
+    d = equity_duration(s)
+    if d is None or s.treasury_10y_yield is None:
+        return None
+    excess = s.treasury_10y_yield - RATE_NEUTRAL_10Y
+    pv_impact = -d * excess          # fractional PV change
+    return round(_clamp(50.0 + pv_impact * 100.0), 1)
+
+
 def cyclically_adjusted_earnings_yield(s: SecuritySnapshot) -> Optional[float]:
     """Earnings yield haircut by how trustworthy the earnings are.
 
@@ -75,16 +123,20 @@ def cyclically_adjusted_earnings_yield(s: SecuritySnapshot) -> Optional[float]:
 # 0.71 - one cheapness factor collecting three weights. The freed
 # weight went to quality, the least redundant lens and the one most
 # aligned with a decade-long hold.
+# v3 weights. Adding the rate-pressure lens at 8% required taking
+# weight from everything else; fable and exp_ret gave up the most since
+# they were the largest. The value bloc (dcf+comps+lbo) is now 19%.
 WEIGHTS = {
-    "fable": 0.22,      # level of the business + margin of safety + gates
-    "exp_ret": 0.16,    # TSR decomposition: what the hold actually earns
-    "quality": 0.15,    # AQR-style durability (v1: 0.12)
-    "dcf": 0.10,        # intrinsic-value gap, cyclically adjusted (v1: 0.12)
-    "firepower": 0.10,  # capacity to keep compounding through cycles
-    "lbo": 0.06,        # financeability, not cheapness (v1: 0.08)
-    "comps": 0.05,      # purely cross-sectional relative value (v1: 0.06)
+    "fable": 0.20,      # level of the business + margin of safety + gates
+    "exp_ret": 0.15,    # TSR decomposition: what the hold actually earns
+    "quality": 0.14,    # AQR-style durability
+    "dcf": 0.09,        # intrinsic-value gap, cyclically adjusted
+    "firepower": 0.09,  # capacity to keep compounding through cycles
+    "rate": 0.08,       # NEW v3: duration x prevailing risk-free rate
     "qii": 0.06,        # trajectory (small: decade holds outlive quarters)
-    "precedents": 0.06, # scarcity / strategic value
+    "lbo": 0.05,        # financeability, not cheapness
+    "comps": 0.05,      # purely cross-sectional relative value
+    "precedents": 0.05, # scarcity / strategic value
     "aoq": 0.04,        # payoff shape (mostly an entry concern)
 }
 
@@ -331,6 +383,7 @@ def sky_scores(universe: Sequence[SecuritySnapshot]) -> Dict[str, SkyResult]:
             "quality": qual.get(t),
             "dcf": None if _dcf is None else round(_dcf * vcm, 1),
             "firepower": firepower_lens(s),
+            "rate": rate_pressure_lens(s),
             "lbo": lbo_lens(s),
             "comps": None if _comps is None else round(_comps * vcm, 1),
             "qii": q,
