@@ -901,3 +901,39 @@ def test_rank_by_odds_excludes_gated_and_sorts():
     res = rank_by_odds(u, trials=1500)
     assert [r.ticker for r in res] == ["A", "B"]
     assert res[0].p_hit >= res[1].p_hit
+
+
+# --- Labelled-outcome validation (recovery vs trap) ---------------------------
+
+def test_label_separation_reads_perfect_ordering_as_auc_one():
+    scores = {"A": 80.0, "B": 75.0, "C": 70.0, "D": 40.0, "E": 35.0, "F": 30.0}
+    labels = {"A": True, "B": True, "C": True,
+              "D": False, "E": False, "F": False}
+    r = bt.label_separation(scores, labels)
+    assert r["auc"] == 1.0
+    assert r["gap"] == pytest.approx(40.0)
+    assert r["n_pos"] == 3 and r["n_neg"] == 3
+
+
+def test_label_separation_reads_inversion_and_noise_honestly():
+    scores = {"A": 30.0, "B": 35.0, "C": 40.0, "D": 70.0, "E": 75.0, "F": 80.0}
+    labels = {"A": True, "B": True, "C": True,
+              "D": False, "E": False, "F": False}
+    assert bt.label_separation(scores, labels)["auc"] == 0.0
+
+    flat = {k: 50.0 for k in scores}
+    assert bt.label_separation(flat, labels)["auc"] == 0.5   # ties = coin flip
+
+
+def test_label_separation_needs_both_classes():
+    scores = {"A": 1.0, "B": 2.0, "C": 3.0}
+    assert bt.label_separation(scores, {k: True for k in scores}) is None
+
+
+def test_best_threshold_reports_both_error_types():
+    scores = {f"T{i}": float(i * 10) for i in range(8)}
+    labels = {f"T{i}": i >= 4 for i in range(8)}
+    r = bt.best_threshold(scores, labels)
+    assert r["threshold"] == 40.0
+    assert r["precision"] == 1.0 and r["recall"] == 1.0
+    assert r["fp"] == 0 and r["fn"] == 0

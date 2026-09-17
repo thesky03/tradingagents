@@ -274,3 +274,71 @@ def regime_stress(universe: Sequence[SecuritySnapshot],
             "exited": sorted(base_top - top)[:6],
         }
     return out
+
+
+def label_separation(scores: Dict[str, float],
+                     labels: Dict[str, bool]) -> Optional[Dict[str, float]]:
+    """Does a score separate two known outcomes? AUC plus the raw gap.
+
+    For the dislocation question specifically: given names that were all
+    down hard at a point in the past, and given which ones recovered and
+    which ones kept falling, does the score put the recoveries above the
+    traps? AUC is the probability that a randomly chosen positive
+    outscores a randomly chosen negative - 0.50 is a coin flip, and a
+    coin flip on labelled history is the honest verdict for most scores.
+
+    Ties count as half, the way a rank-based AUC requires. The mean gap
+    is reported alongside because AUC says only that the ordering is
+    right, not that the separation is large enough to act on, and a
+    threshold has to be set in score units.
+    """
+    common = sorted(set(scores) & set(labels))
+    pos = [scores[t] for t in common if labels[t]]
+    neg = [scores[t] for t in common if not labels[t]]
+    if len(pos) < 2 or len(neg) < 2:
+        return None
+    wins = sum((1.0 if p > n else 0.5 if p == n else 0.0)
+               for p in pos for n in neg)
+    auc = wins / (len(pos) * len(neg))
+    mp, mn = sum(pos) / len(pos), sum(neg) / len(neg)
+    # Pooled spread, so the gap can be read in standard deviations.
+    def _var(xs, m):
+        return sum((x - m) ** 2 for x in xs) / max(1, len(xs) - 1)
+    pooled = (((len(pos) - 1) * _var(pos, mp) + (len(neg) - 1) * _var(neg, mn))
+              / max(1, len(pos) + len(neg) - 2)) ** 0.5
+    return {"auc": round(auc, 3), "n_pos": len(pos), "n_neg": len(neg),
+            "mean_pos": round(mp, 1), "mean_neg": round(mn, 1),
+            "gap": round(mp - mn, 1),
+            "gap_sd": round((mp - mn) / pooled, 2) if pooled > 1e-9 else 0.0}
+
+
+def best_threshold(scores: Dict[str, float],
+                   labels: Dict[str, bool]) -> Optional[Dict[str, float]]:
+    """The cutoff that best splits the labels, and what it costs.
+
+    Reported with precision and recall rather than accuracy alone: in a
+    drawdown screen the two errors are not symmetric. Missing a recovery
+    costs an opportunity; buying a trap costs capital.
+
+    A threshold fitted on the same data that scores it is optimistic by
+    construction. Treat it as a description of this sample, not as a
+    rule, until it survives a period it was not fitted on.
+    """
+    common = sorted(set(scores) & set(labels))
+    if len(common) < 6:
+        return None
+    best = None
+    for cut in sorted({scores[t] for t in common}):
+        tp = sum(1 for t in common if scores[t] >= cut and labels[t])
+        fp = sum(1 for t in common if scores[t] >= cut and not labels[t])
+        fn = sum(1 for t in common if scores[t] < cut and labels[t])
+        tn = sum(1 for t in common if scores[t] < cut and not labels[t])
+        if tp + fp == 0 or tp + fn == 0:
+            continue
+        prec, rec = tp / (tp + fp), tp / (tp + fn)
+        f1 = 2 * prec * rec / (prec + rec) if prec + rec > 0 else 0.0
+        if best is None or f1 > best["f1"]:
+            best = {"threshold": round(cut, 1), "precision": round(prec, 2),
+                    "recall": round(rec, 2), "f1": round(f1, 3),
+                    "tp": tp, "fp": fp, "fn": fn, "tn": tn}
+    return best
