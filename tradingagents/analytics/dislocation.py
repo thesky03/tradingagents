@@ -83,6 +83,19 @@ scores AUC 0.815; 0.80 was chosen instead, at a cost of 0.023, because
 a screen with no level anchor at all would happily buy junk that is
 merely decelerating less than it was.
 
+WHAT IT NEEDS, AND WHY THAT LIMITS WHERE IT CAN RUN. The score is
+carried by forward-versus-trailing growth and margin direction. Those
+are per-name research facts, not archetype defaults, and the screen is
+sensitive to them in a way the earlier version was not - which makes it
+unsafe to run over a sweep-graded universe. Scored against the
+sweep inputs for the 370-name book, Nike reads as a PRIME DISLOCATION
+at 78; scored against its researched figures - revenue back at FY2022
+levels, net income down 49%, free cash flow down 51% - it reads 16 and
+is a labelled trap. Nothing was missing in the first case, which is the
+danger: the field was populated with an archetype default. ``coverage``
+catches an absent input; it cannot catch a fabricated one. Run this only
+where the growth and margin figures were actually sourced per name.
+
 WHAT IT IS NOT. Not a timing tool: dislocations stay dislocated for
 quarters. Not a substitute for SKY: a name can be a fine dislocation
 trade and a poor decade-long hold. Run both and read the disagreement.
@@ -102,6 +115,7 @@ MIN_DRAWDOWN = 0.25          # eligibility only: below this there is nothing to 
 SEVERE_DRAWDOWN = 0.50       # reported as a caution, no longer a veto (see below)
 TRAJECTORY_WEIGHT = 0.80     # vs the level-of-quality anchor
 TRAP_PENALTY = 0.45          # traps are penalised, not zeroed - they can be right
+MIN_COVERAGE = 0.60          # below this the trajectory reading is not a reading
 
 
 def _structural_qii(s: SecuritySnapshot) -> Optional[float]:
@@ -145,11 +159,25 @@ class DislocationResult:
     survival: float                   # REPORTED, UNSCORED except as a veto
     upside_to_normal: float           # return if the multiple returns to its median
     is_trap: bool
+    coverage: float = 1.0             # share of the trajectory weight actually sourced
     trap_reasons: List[str] = field(default_factory=list)
     cautions: List[str] = field(default_factory=list)
 
     @property
+    def has_decisive_input(self) -> bool:
+        """Was forward-vs-trailing growth available at all?
+
+        Without it the screen is reading margin direction and cash
+        conversion alone, which on the case set separated the labels far
+        less well than deceleration did. A name scored without it is not
+        a weaker candidate - it is an unscored one.
+        """
+        return self.coverage >= MIN_COVERAGE
+
+    @property
     def verdict(self) -> str:
+        if not self.has_decisive_input:
+            return "INSUFFICIENT DATA (needs forward growth vs trailing)"
         if self.is_trap:
             return f"TRAP ({', '.join(self.trap_reasons)})"
         if self.score >= 70:
@@ -161,7 +189,7 @@ class DislocationResult:
         return "NO EDGE"
 
 
-def _trajectory(s: SecuritySnapshot) -> float:
+def _trajectory(s: SecuritySnapshot) -> "tuple[float, float]":
     """The first derivative of the numbers, price excluded entirely.
 
     Weights within this pillar follow the measured single-input
@@ -170,6 +198,10 @@ def _trajectory(s: SecuritySnapshot) -> float:
     conversion. All four are things a narrative cannot change in a
     quarter, and all four were reported BEFORE the troughs they are
     being asked to identify.
+
+    Returns the reading and the share of weight that was actually
+    sourced, because a trajectory computed from two of the four inputs
+    is not the same claim as one computed from all four.
     """
     parts: List[float] = []
     weights: List[float] = []
@@ -189,8 +221,9 @@ def _trajectory(s: SecuritySnapshot) -> float:
         weights.append(0.20)
 
     if not parts:
-        return 50.0
-    return round(sum(p * w for p, w in zip(parts, weights)) / sum(weights), 1)
+        return 50.0, 0.0
+    return (round(sum(p * w for p, w in zip(parts, weights)) / sum(weights), 1),
+            round(sum(weights), 2))
 
 
 def _intactness(s: SecuritySnapshot) -> float:
@@ -331,9 +364,9 @@ def dislocation_score(s: SecuritySnapshot) -> Optional[DislocationResult]:
     if dd is None or dd < MIN_DRAWDOWN:
         return None
 
-    traj = _trajectory(s)
+    traj, coverage = _trajectory(s)
     intact = _intactness(s)
-    traps = _trap_check(s, traj)
+    traps = _trap_check(s, traj) if coverage >= MIN_COVERAGE else []
 
     score = TRAJECTORY_WEIGHT * traj + (1.0 - TRAJECTORY_WEIGHT) * intact
     if traps:
@@ -341,7 +374,7 @@ def dislocation_score(s: SecuritySnapshot) -> Optional[DislocationResult]:
 
     return DislocationResult(
         ticker=s.ticker, score=round(score, 1), drawdown=round(dd, 3),
-        trajectory=traj, intactness=intact,
+        trajectory=traj, intactness=intact, coverage=coverage,
         narrative_gap=_narrative_gap(s), survival=_survival(s),
         upside_to_normal=_upside_to_normal(s),
         is_trap=bool(traps), trap_reasons=traps, cautions=_cautions(s, dd),
@@ -350,11 +383,16 @@ def dislocation_score(s: SecuritySnapshot) -> Optional[DislocationResult]:
 
 def screen_dislocations(universe: Sequence[SecuritySnapshot],
                         include_traps: bool = False) -> List[DislocationResult]:
-    """Rank a universe by dislocation score; drops non-drawdown names."""
+    """Rank a universe by dislocation score.
+
+    Drops names with no drawdown, and names whose forward-growth input
+    was never sourced - the screen has nothing to say about either, and
+    ranking them anyway would dress up missing data as a verdict.
+    """
     out: List[DislocationResult] = []
     for s in universe:
         r = dislocation_score(s)
-        if r is None:
+        if r is None or not r.has_decisive_input:
             continue
         if r.is_trap and not include_traps:
             continue
@@ -413,7 +451,11 @@ def dislocation_stance(s: SecuritySnapshot) -> Optional[DislocationStance]:
     verdict = d.verdict
     reasons: List[str] = []
 
-    if f.gates_tripped:
+    if not d.has_decisive_input:
+        action, cap = "STAND_ASIDE", 0.0
+        reasons.append("forward growth vs trailing growth was never sourced - "
+                       "this is missing data, not a negative verdict")
+    elif f.gates_tripped:
         action, cap = "STAND_ASIDE", 0.0
         reasons.append(f"absolute gate: {', '.join(f.gates_tripped)}")
     elif d.is_trap:

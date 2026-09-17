@@ -27,7 +27,8 @@ from .horizon import HorizonResult, simulate_horizon, rank_by_odds
 from .dislocation import (DislocationResult, DislocationStance,
                           dislocation_score, dislocation_stance,
                           screen_dislocations, growth_deceleration,
-                          MIN_DRAWDOWN, SEVERE_DRAWDOWN, DISLOCATION_CAPS)
+                          MIN_DRAWDOWN, SEVERE_DRAWDOWN, MIN_COVERAGE,
+                          DISLOCATION_CAPS)
 
 __all__ = [
     "Catalyst",
@@ -62,5 +63,6 @@ __all__ = [
     "growth_deceleration",
     "MIN_DRAWDOWN",
     "SEVERE_DRAWDOWN",
+    "MIN_COVERAGE",
     "DISLOCATION_CAPS",
 ]

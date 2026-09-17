@@ -21,6 +21,7 @@ import pytest
 from tradingagents.analytics import (
     DISLOCATION_CAPS,
     MIN_DRAWDOWN,
+    MIN_COVERAGE,
     SEVERE_DRAWDOWN,
     SecuritySnapshot,
     dislocation_score,
@@ -297,3 +298,36 @@ def test_stance_carries_a_written_falsifier():
 
 def test_stance_silent_outside_a_drawdown():
     assert dislocation_stance(_dislocated(pct_off_52w_high=0.05)) is None
+
+
+# --- Missing data must not masquerade as a verdict -----------------------------
+
+def test_unsourced_forward_growth_yields_no_verdict():
+    """The sweep-grade universe rarely carries forward growth. Scored
+    without it, Nike reads as a PRIME DISLOCATION - and Nike is a
+    labelled trap that scores 16 when the input is present."""
+    blind = _dislocated(demonstrated_growth=None)
+    r = dislocation_score(blind)
+    assert r is not None
+    assert not r.has_decisive_input
+    assert r.verdict.startswith("INSUFFICIENT DATA")
+
+
+def test_screen_drops_unscoreable_names_rather_than_ranking_them():
+    universe = [_dislocated(ticker="FULL"),
+                _dislocated(ticker="BLIND", demonstrated_growth=None)]
+    assert [r.ticker for r in screen_dislocations(universe)] == ["FULL"]
+
+
+def test_stance_stands_aside_on_missing_data_and_says_so():
+    st = dislocation_stance(_dislocated(demonstrated_growth=None))
+    assert st.action == "STAND_ASIDE"
+    assert any("missing data, not a negative verdict" in r for r in st.reasons)
+
+
+def test_coverage_is_reported_as_a_fraction():
+    full = dislocation_score(_dislocated())
+    assert full.coverage == pytest.approx(1.0)
+    partial = dislocation_score(_dislocated(demonstrated_growth=None,
+                                            fcf_to_net_income=None))
+    assert partial.coverage < MIN_COVERAGE
