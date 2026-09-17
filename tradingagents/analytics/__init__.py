@@ -24,6 +24,8 @@ from .sky import (SkyResult, sky_scores, cyclically_adjusted_earnings_yield,
                   equity_duration)
 from . import backtest
 from .horizon import HorizonResult, simulate_horizon, rank_by_odds
+from .holdco import (Stake, SumOfParts, evidence_summary,
+                     EVIDENCE_HAIRCUT, CONTROL_BLOCK_DISCOUNT)
 from .compounding import (CompoundingCase, compounding_case, rank_compounders,
                           required_cagr, required_growth, size_headroom)
 from .dislocation import (DislocationResult, DislocationStance,
@@ -63,6 +65,11 @@ __all__ = [
     "required_cagr",
     "required_growth",
     "size_headroom",
+    "Stake",
+    "SumOfParts",
+    "evidence_summary",
+    "EVIDENCE_HAIRCUT",
+    "CONTROL_BLOCK_DISCOUNT",
     "DislocationResult",
     "DislocationStance",
     "dislocation_score",
