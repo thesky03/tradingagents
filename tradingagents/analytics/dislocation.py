@@ -15,32 +15,93 @@ right. This module is the systematic version of that disagreement.
 
 THE CENTRAL PROBLEM. On the tape, a dislocation and a value trap look
 identical - both are quality-shaped things down 40%. Momentum cannot
-separate them because it is the one thing they share. The separator is
-the DIVERGENCE between what the price did and what the business did:
+separate them because it is the one thing they share.
 
-    dislocation = price collapsed AND fundamentals intact
-    value trap   = price collapsed AND fundamentals collapsed
+WHAT VERSION 1 GOT WRONG, AND HOW WE KNOW. v1 assumed the separator was
+"price collapsed but the business is intact", and scored a blend of
+drawdown depth (as the prize), cheapness against the name's own history,
+balance-sheet survival, and a level-of-quality intactness reading. Run
+against 25 labelled 2025-26 crashes (``analytics.cases``), it scored
+AUC 0.591 - a coin flip - and its severity veto classified Accenture,
+ServiceNow, UnitedHealth, Constellation and Atlassian as traps. It
+failed on the case it was built for.
 
-So this screen inverts the usual sign. A large drawdown is scored as
-OPPORTUNITY, not as risk - but only after the business clears an
-intactness test. Without that test the screen is a knife-catching
-machine; the test is doing all the work, and the drawdown term is just
-sizing the prize.
+The per-input diagnostic said why. Measured as single-input classifiers
+on those cases:
+
+    growth deceleration (fwd vs trailing)   AUC 0.79   <- the signal
+    demonstrated forward growth             AUC 0.76
+    margin trend                            AUC 0.74
+    cash conversion (FCF/NI)                AUC 0.69
+    ---------------------------------------------------
+    return on capital, moat count, margin
+      stability (the LEVEL of quality)      AUC 0.44-0.50  (nothing)
+    interest coverage                       AUC 0.38   (inverted)
+    buyback yield                           AUC 0.37   (inverted)
+    DRAWDOWN DEPTH                          AUC 0.33   (inverted)
+
+So: depth of decline predicted traps, not recoveries. Cheapness against
+a name's own history predicted traps too - which independently matches
+Sparkline Capital's May 2026 finding that among software names down
+30%+, every one of them was cheap and cheapness carried no information,
+with "an abnormally long left tail of value traps". Buying back stock
+into the fall, which v1 treated as the strongest survival signal there
+is, was done just as hard by Fiserv (9% buyback yield), Gartner (6%)
+and Lululemon (5.5%) on their way down.
+
+WHAT SEPARATES THEM, THEN. Not the level of quality and not the price -
+the FIRST DERIVATIVE of the numbers. Recoveries were still compounding
+at the trough; traps were decelerating, and had been for a while:
+
+    CoStar grew revenue 18% while falling 51%; its net new bookings were
+    down 26%. The Trade Desk went from 19% growth to 3% in four
+    quarters. Gartner's operating margin halved, 16.6% -> 5.7%, and its
+    FCF margin halved with it. Nike's revenue returned to FY2022 levels
+    with net income down 49% and free cash flow down 51%.
+
+    Accenture, at the same moment, missed revenue by 0.3% and kept its
+    margins and its cash conversion. So did Salesforce and ServiceNow -
+    ServiceNow beat every metric in the quarter that took it down 17%.
+
+Reported revenue growth is no defence. Direction is.
+
+HOW THE SCORE IS BUILT NOW. Drawdown is an ELIGIBILITY test, not a
+scoring term - a name must be down 25% to be in the conversation, and
+past that, depth adds nothing. Score is trajectory (80%) plus a small
+anchor on the level of quality (20%), so that a wrecked business cannot
+score on one good quarter. Cheapness and survival are computed and
+REPORTED, because they size the prize and the waiting time, but they do
+not move the score.
+
+HONEST STATUS OF THE NUMBERS. The rebuild scores AUC 0.79 on the same
+25 cases, 72% leave-one-out accuracy against a 56% base rate. That is
+IN-SAMPLE: the weights were chosen after seeing which inputs separated
+those labels, and the case inputs were themselves encoded by someone
+who knew the outcomes. The honest reading is "this is the most
+optimistic version of its performance". A trajectory weight of 1.00
+scores AUC 0.815; 0.80 was chosen instead, at a cost of 0.023, because
+a screen with no level anchor at all would happily buy junk that is
+merely decelerating less than it was.
 
 WHAT IT IS NOT. Not a timing tool: dislocations stay dislocated for
-quarters, and this says nothing about when the market changes its mind.
-Not a substitute for SKY: a name can be a fine dislocation trade and a
-poor decade-long hold. Run both and read the disagreement.
+quarters. Not a substitute for SKY: a name can be a fine dislocation
+trade and a poor decade-long hold. Run both and read the disagreement.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence
+from typing import List, Optional, Sequence
 
 from .backtest import structural_only
 from .fable_score import SecuritySnapshot, fable_score
 from .methods import qii
+
+
+MIN_DRAWDOWN = 0.25          # eligibility only: below this there is nothing to trade
+SEVERE_DRAWDOWN = 0.50       # reported as a caution, no longer a veto (see below)
+TRAJECTORY_WEIGHT = 0.80     # vs the level-of-quality anchor
+TRAP_PENALTY = 0.45          # traps are penalised, not zeroed - they can be right
 
 
 def _structural_qii(s: SecuritySnapshot) -> Optional[float]:
@@ -48,31 +109,44 @@ def _structural_qii(s: SecuritySnapshot) -> Optional[float]:
 
     QII carries a momentum term and an estimate-revision term, and in
     a crash both are downstream of the price: the stock falls, the
-    tape term collapses, analysts cut, and the trajectory reading
-    turns negative without a single number in the business having
-    moved. Feeding that into an intactness test would rebuild the
-    circularity this module exists to break, so QII is computed here
-    on a price-blanked snapshot - margins, cash conversion, leverage
-    and capital allocation only.
+    tape term collapses, analysts cut, and the trajectory reading turns
+    negative without a single number in the business having moved.
+    Feeding that into this screen would rebuild the circularity the
+    module exists to break, so QII is computed on a price-blanked
+    snapshot - margins, cash conversion, leverage and capital
+    allocation only.
     """
     return qii(structural_only(s))
 
 
-MIN_DRAWDOWN = 0.25          # below this there is no dislocation to trade
-SEVERE_DRAWDOWN = 0.50       # past this, assume the market may know something
+def growth_deceleration(s: SecuritySnapshot) -> Optional[float]:
+    """Forward growth minus trailing growth: the single best separator.
+
+    Positive means the business is accelerating into the crash, which
+    is the shape of a narrative dislocation. Negative means the market
+    is extrapolating a slowdown that is already in the reported
+    numbers, which is the shape of a trap - CoStar's bookings down 26%
+    against 18% reported revenue growth, or The Trade Desk going from
+    19% to 3% over four quarters.
+    """
+    if s.demonstrated_growth is None or s.revenue_cagr_3y is None:
+        return None
+    return s.demonstrated_growth - s.revenue_cagr_3y
 
 
 @dataclass
 class DislocationResult:
     ticker: str
     score: float                      # 0-100
-    drawdown: float
-    intactness: float                 # 0-100: is the business still working?
-    survival: float                   # 0-100: can it wait for the re-rating?
-    narrative_gap: float              # 0-100: cheap vs its own history, given ROIC
+    drawdown: float                   # eligibility, not a scoring input
+    trajectory: float                 # 0-100: are the numbers still improving?
+    intactness: float                 # 0-100: level of quality (minor weight)
+    narrative_gap: float              # REPORTED, UNSCORED: cheap vs own history
+    survival: float                   # REPORTED, UNSCORED except as a veto
     upside_to_normal: float           # return if the multiple returns to its median
     is_trap: bool
     trap_reasons: List[str] = field(default_factory=list)
+    cautions: List[str] = field(default_factory=list)
 
     @property
     def verdict(self) -> str:
@@ -87,25 +161,60 @@ class DislocationResult:
         return "NO EDGE"
 
 
-def _intactness(s: SecuritySnapshot) -> float:
-    """Is the business still working while the price says it is not?
+def _trajectory(s: SecuritySnapshot) -> float:
+    """The first derivative of the numbers, price excluded entirely.
 
-    Deliberately excludes every price-derived field. The question is
-    whether revenue still grows, margins hold, cash still converts and
-    returns on capital still clear the cost of capital - the things a
-    narrative cannot change in a quarter.
+    Weights within this pillar follow the measured single-input
+    separation on the 2025-26 case set, in that order: deceleration,
+    margin direction, the absolute forward growth rate, cash
+    conversion. All four are things a narrative cannot change in a
+    quarter, and all four were reported BEFORE the troughs they are
+    being asked to identify.
     """
     parts: List[float] = []
-    if s.revenue_cagr_3y is not None:
-        parts.append(max(0.0, min(100.0, 50.0 + s.revenue_cagr_3y * 400.0)))
+    weights: List[float] = []
+
+    d = growth_deceleration(s)
+    if d is not None:
+        parts.append(max(0.0, min(100.0, 50.0 + d * 500.0)))
+        weights.append(0.35)
+    if s.margin_trend is not None:
+        parts.append({1: 90.0, 0: 60.0, -1: 15.0}[s.margin_trend])
+        weights.append(0.25)
+    if s.demonstrated_growth is not None:
+        parts.append(max(0.0, min(100.0, 40.0 + s.demonstrated_growth * 300.0)))
+        weights.append(0.20)
+    if s.fcf_to_net_income is not None:
+        parts.append(max(0.0, min(100.0, s.fcf_to_net_income * 70.0)))
+        weights.append(0.20)
+
+    if not parts:
+        return 50.0
+    return round(sum(p * w for p, w in zip(parts, weights)) / sum(weights), 1)
+
+
+def _intactness(s: SecuritySnapshot) -> float:
+    """The LEVEL of quality: is this a good business at all?
+
+    On the 2025-26 cases the level fields carried essentially no
+    information about which crashes recovered - return on capital,
+    moat count and margin stability all scored AUC 0.44-0.50. That is
+    not surprising: quality is what gets a stock into this screen in
+    the first place, so it barely varies across the candidates. It is
+    kept at a fifth of the weight as an anchor against buying
+    something merely decelerating less than it used to.
+
+    Excludes every price-derived field by construction.
+    """
+    parts: List[float] = []
     if s.roic is not None and s.wacc is not None:
         parts.append(max(0.0, min(100.0, 50.0 + (s.roic - s.wacc) * 400.0)))
-    if s.fcf_to_net_income is not None:
-        parts.append(max(0.0, min(100.0, s.fcf_to_net_income * 75.0)))
-    if s.margin_trend is not None:
-        parts.append({1: 90.0, 0: 60.0, -1: 20.0}[s.margin_trend])
     if s.gross_margin_stability is not None:
         parts.append(s.gross_margin_stability * 100.0)
+    if s.moat_evidence_count is not None:
+        parts.append(min(100.0, 25.0 * s.moat_evidence_count))
+    if s.fcf_to_net_income is not None:
+        parts.append(max(0.0, min(100.0, s.fcf_to_net_income * 75.0)))
     q = _structural_qii(s)
     if q is not None:
         parts.append(q)
@@ -115,8 +224,13 @@ def _intactness(s: SecuritySnapshot) -> float:
 def _survival(s: SecuritySnapshot) -> float:
     """Can it fund itself long enough for the market to change its mind?
 
-    A dislocation only pays if the company is still there when the
-    re-rating arrives. Leverage is the clock.
+    REPORTED, NOT SCORED. A strong balance sheet lets you wait; it does
+    not make you right. On the case set, interest coverage separated
+    the labels at AUC 0.38 and buyback yield at 0.37 - both inverted.
+    Management buying stock into the fall, which v1 treated as the
+    strongest survival signal there is, was done hardest by Fiserv,
+    Gartner and Lululemon on their way down. Only leverage retains a
+    role, as a veto, because leverage is the clock.
     """
     parts: List[float] = []
     if s.net_debt_to_ebitda is not None:
@@ -125,28 +239,23 @@ def _survival(s: SecuritySnapshot) -> float:
         parts.append(max(0.0, min(100.0, s.interest_coverage / 12.0 * 100.0)))
     if s.fcf_to_net_income is not None:
         parts.append(max(0.0, min(100.0, s.fcf_to_net_income * 80.0)))
-    btr = s.base_total_return()
-    if btr is not None:
-        # Buying back stock into the crash is the strongest survival signal
-        # there is: it is management betting against the narrative with cash.
-        parts.append(max(0.0, min(100.0, 50.0 + btr * 500.0)))
     return round(sum(parts) / len(parts), 1) if parts else 50.0
 
 
 def _narrative_gap(s: SecuritySnapshot) -> float:
-    """Cheap versus its OWN history while the returns on capital still hold.
+    """Cheap versus its own history. REPORTED, NOT SCORED.
 
-    The signature of a narrative dislocation: the multiple has collapsed
-    toward the bottom of its historical range while ROIC has not. That
-    combination says the market re-rated the story, not the economics.
+    v1 scored this as the signature of a dislocation. The case set says
+    the opposite: valuation percentile separated the labels at AUC
+    0.72 in the direction that the LESS cheap names recovered, which
+    independently matches Sparkline's finding that every crashed
+    software name was cheap and that cheapness carried no information.
+    It is retained because it sizes the prize - how far a re-rating
+    could carry - not because it identifies one.
     """
     if s.valuation_percentile_vs_history is None:
         return 50.0
-    cheap = 100.0 - s.valuation_percentile_vs_history
-    if s.roic is not None and s.wacc is not None and s.roic > s.wacc:
-        quality_bonus = min(25.0, (s.roic - s.wacc) * 200.0)
-        return round(min(100.0, cheap * 0.75 + quality_bonus + 12.5), 1)
-    return round(cheap * 0.6, 1)
+    return round(100.0 - s.valuation_percentile_vs_history, 1)
 
 
 def _upside_to_normal(s: SecuritySnapshot, years: int = 3) -> float:
@@ -160,38 +269,56 @@ def _upside_to_normal(s: SecuritySnapshot, years: int = 3) -> float:
     g = max(min(g, 0.25), -0.05)
     mult = 1.0
     if s.valuation_percentile_vs_history is not None:
-        # percentile -> rough multiple ratio back to the median
         mult = 1.0 + (50.0 - s.valuation_percentile_vs_history) / 100.0
         mult = max(0.6, min(2.0, mult))
     return round(((1.0 + g) ** years) * mult - 1.0, 3)
 
 
-def _trap_check(s: SecuritySnapshot, intact: float) -> List[str]:
+def _trap_check(s: SecuritySnapshot, trajectory: float) -> List[str]:
     """Reasons to believe the bear case is RIGHT.
 
-    Every item here is a way the market's verdict turns out to be
-    correct: the numbers are already confirming the story, the balance
-    sheet cannot wait, or the fall is so severe that assuming the crowd
-    is wrong requires more conviction than evidence supports.
+    Every item is a way the market's verdict turns out to be correct:
+    the numbers already confirm the story, or the balance sheet cannot
+    wait for the argument to be settled.
+
+    Two of v1's vetoes were removed here because the case set
+    disconfirmed them. "Returns below cost of capital" vetoed
+    Atlassian, CVS and Humana - in a crash, ROIC is often at a
+    cyclical trough, so demanding it clear WACC at the bottom rejects
+    exactly the names whose returns are about to recover. And "down
+    more than 50%, assume the market knows something" vetoed
+    Accenture, ServiceNow, UnitedHealth, Constellation and Atlassian -
+    five of the six largest recoveries in the set, including the case
+    this module was built for. Severity is now a caution, not a veto.
     """
     reasons: List[str] = []
-    if intact < 45.0:
-        reasons.append("fundamentals confirm the bear case")
-    q = _structural_qii(s)
-    if q is not None and q < 35.0:
-        reasons.append("trajectory deteriorating")
-    if s.margin_trend is not None and s.margin_trend < 0 and (
-            s.revenue_cagr_3y is not None and s.revenue_cagr_3y < 0.02):
-        reasons.append("margins AND revenue both falling")
+    if trajectory < 35.0:
+        reasons.append("the numbers already confirm the bear case")
+    if (s.margin_trend is not None and s.margin_trend < 0
+            and (growth_deceleration(s) or 0.0) < 0.0):
+        reasons.append("margins falling while growth decelerates")
+    if s.demonstrated_growth is not None and s.demonstrated_growth < 0.0:
+        reasons.append("forward growth is negative")
     if s.net_debt_to_ebitda is not None and s.net_debt_to_ebitda > 3.5:
         reasons.append("leverage limits the waiting time")
-    if s.roic is not None and s.wacc is not None and s.roic < s.wacc:
-        reasons.append("returns below cost of capital")
-    if s.pct_off_52w_high is not None and s.pct_off_52w_high > SEVERE_DRAWDOWN:
-        reasons.append(f"down >{SEVERE_DRAWDOWN:.0%} - assume the market knows something")
     if fable_score(s).gates_tripped:
         reasons.append("FABLE gate tripped")
     return reasons
+
+
+def _cautions(s: SecuritySnapshot, dd: float) -> List[str]:
+    """Things worth knowing that are not disqualifying on this evidence."""
+    out: List[str] = []
+    if dd > SEVERE_DRAWDOWN:
+        out.append(f"down >{SEVERE_DRAWDOWN:.0%} - a majority of the traps in the "
+                   f"case set were, but so were five of the six best recoveries")
+    if s.roic is not None and s.wacc is not None and s.roic < s.wacc:
+        out.append("returns below cost of capital at the trough")
+    if s.valuation_percentile_vs_history is not None and \
+            s.valuation_percentile_vs_history < 5.0:
+        out.append("cheapest in its own history - on the case set that was "
+                   "mildly ANTI-predictive, not supportive")
+    return out
 
 
 def dislocation_score(s: SecuritySnapshot) -> Optional[DislocationResult]:
@@ -204,24 +331,20 @@ def dislocation_score(s: SecuritySnapshot) -> Optional[DislocationResult]:
     if dd is None or dd < MIN_DRAWDOWN:
         return None
 
+    traj = _trajectory(s)
     intact = _intactness(s)
-    surv = _survival(s)
-    gap = _narrative_gap(s)
-    traps = _trap_check(s, intact)
+    traps = _trap_check(s, traj)
 
-    # Drawdown is the PRIZE term, and it saturates: past ~45% the extra
-    # fall stops being extra opportunity and starts being information.
-    dd_term = min(dd / 0.45, 1.0) * 100.0
-
-    score = (0.40 * intact + 0.22 * gap + 0.20 * surv + 0.18 * dd_term)
+    score = TRAJECTORY_WEIGHT * traj + (1.0 - TRAJECTORY_WEIGHT) * intact
     if traps:
-        score *= 0.45          # heavily penalised, not zeroed - traps can be right
+        score *= TRAP_PENALTY
 
     return DislocationResult(
         ticker=s.ticker, score=round(score, 1), drawdown=round(dd, 3),
-        intactness=intact, survival=surv, narrative_gap=gap,
+        trajectory=traj, intactness=intact,
+        narrative_gap=_narrative_gap(s), survival=_survival(s),
         upside_to_normal=_upside_to_normal(s),
-        is_trap=bool(traps), trap_reasons=traps,
+        is_trap=bool(traps), trap_reasons=traps, cautions=_cautions(s, dd),
     )
 
 
@@ -298,16 +421,18 @@ def dislocation_stance(s: SecuritySnapshot) -> Optional[DislocationStance]:
         reasons.extend(d.trap_reasons)
     elif verdict in DISLOCATION_CAPS:
         action, cap = "BUY_DISLOCATION", DISLOCATION_CAPS[verdict]
-        reasons.append(f"down {d.drawdown:.0%} with intactness {d.intactness:.0f}")
+        reasons.append(f"down {d.drawdown:.0%} with trajectory {d.trajectory:.0f} "
+                       f"- the numbers are still improving")
         reasons.append(f"{d.upside_to_normal:+.0%} if the multiple only returns "
                        f"to its own median")
     elif verdict == "WATCH":
         action, cap = "WATCH", 0.0
-        reasons.append("cheap and falling, but the business case is not clear enough")
+        reasons.append("cheap and falling, but the trajectory is not clear enough")
     else:
         action, cap = "STAND_ASIDE", 0.0
-        reasons.append("no edge: the drawdown is not backed by intactness")
+        reasons.append("no edge: the drawdown is not backed by an improving trajectory")
 
+    reasons.extend(d.cautions)
     disagree = action == "BUY_DISLOCATION" and sig in ("AVOID", "WAIT")
     if disagree:
         reasons.append(f"momentum-aware system says {sig} at FABLE {f.total:.1f} "
@@ -321,10 +446,11 @@ def dislocation_stance(s: SecuritySnapshot) -> Optional[DislocationStance]:
         disagreement=disagree,
         # The falsifier, written before the position exists. A dislocation
         # trade ends when the gap it was buying closes - or when the
-        # intactness that justified it stops being true.
+        # trajectory that justified it turns over.
         exit_rule=("exit on re-rating to the ~50th valuation percentile of its "
-                   "own history, or immediately if intactness breaks: two "
-                   "consecutive quarters of falling margins with revenue "
-                   "under +2%, ROIC through WACC, or any FABLE gate tripping"),
+                   "own history, or immediately if the trajectory breaks: "
+                   "forward growth falling below trailing growth for two "
+                   "consecutive quarters, margins contracting while growth "
+                   "decelerates, or any FABLE gate tripping"),
         reasons=reasons,
     )
