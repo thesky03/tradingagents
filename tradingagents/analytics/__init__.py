@@ -24,8 +24,10 @@ from .sky import (SkyResult, sky_scores, cyclically_adjusted_earnings_yield,
                   equity_duration)
 from . import backtest
 from .horizon import HorizonResult, simulate_horizon, rank_by_odds
-from .dislocation import (DislocationResult, dislocation_score,
-                          screen_dislocations, MIN_DRAWDOWN, SEVERE_DRAWDOWN)
+from .dislocation import (DislocationResult, DislocationStance,
+                          dislocation_score, dislocation_stance,
+                          screen_dislocations, MIN_DRAWDOWN,
+                          SEVERE_DRAWDOWN, DISLOCATION_CAPS)
 
 __all__ = [
     "Catalyst",
@@ -53,8 +55,11 @@ __all__ = [
     "simulate_horizon",
     "rank_by_odds",
     "DislocationResult",
+    "DislocationStance",
     "dislocation_score",
+    "dislocation_stance",
     "screen_dislocations",
     "MIN_DRAWDOWN",
     "SEVERE_DRAWDOWN",
+    "DISLOCATION_CAPS",
 ]

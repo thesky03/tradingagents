@@ -238,3 +238,93 @@ def screen_dislocations(universe: Sequence[SecuritySnapshot],
         out.append(r)
     out.sort(key=lambda r: -r.score)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Resolving the disagreement: what the book should actually do
+# ---------------------------------------------------------------------------
+
+# A dislocation entry is a contrarian one: the tape, the revisions and the
+# composite all disagree with it. So it is sized at roughly half of what
+# the same conviction would earn in a name where everything agrees, and it
+# is entered in thirds rather than at once - because a stock down 35% has
+# already proved it can fall 35%, and nothing in this module claims to know
+# where the bottom is.
+DISLOCATION_CAPS = {"PRIME DISLOCATION": 0.08, "DISLOCATION": 0.05}
+ENTRY_TRANCHES = 3
+
+
+@dataclass
+class DislocationStance:
+    ticker: str
+    action: str                       # BUY_DISLOCATION / WATCH / STAND_ASIDE
+    max_weight: float                 # fraction of the sleeve, all tranches in
+    tranche_weight: float
+    dislocation: DislocationResult
+    fable_total: float
+    fable_signal: str                 # what the momentum-aware system said
+    disagreement: bool                # the two lenses point opposite ways
+    exit_rule: str
+    reasons: List[str] = field(default_factory=list)
+
+
+def dislocation_stance(s: SecuritySnapshot) -> Optional[DislocationStance]:
+    """Reconcile the drawdown screen with the momentum-aware verdict.
+
+    Both lenses are kept, because each is right about something. FABLE
+    is right that a falling stock has worse near-term odds; this screen
+    is right that the fall is where the asymmetry lives. The rule is
+    therefore not "override FABLE" but "act on the disagreement, at
+    contrarian size, in tranches, with the falsifier written down".
+
+    Returns None when the name is not in a drawdown at all - there is
+    nothing here to reconcile.
+    """
+    d = dislocation_score(s)
+    if d is None:
+        return None
+
+    from .fable_score import entry_signal          # local: avoids a cycle
+    f = fable_score(s)
+    sig, _ = entry_signal(s)
+    verdict = d.verdict
+    reasons: List[str] = []
+
+    if f.gates_tripped:
+        action, cap = "STAND_ASIDE", 0.0
+        reasons.append(f"absolute gate: {', '.join(f.gates_tripped)}")
+    elif d.is_trap:
+        action, cap = "STAND_ASIDE", 0.0
+        reasons.extend(d.trap_reasons)
+    elif verdict in DISLOCATION_CAPS:
+        action, cap = "BUY_DISLOCATION", DISLOCATION_CAPS[verdict]
+        reasons.append(f"down {d.drawdown:.0%} with intactness {d.intactness:.0f}")
+        reasons.append(f"{d.upside_to_normal:+.0%} if the multiple only returns "
+                       f"to its own median")
+    elif verdict == "WATCH":
+        action, cap = "WATCH", 0.0
+        reasons.append("cheap and falling, but the business case is not clear enough")
+    else:
+        action, cap = "STAND_ASIDE", 0.0
+        reasons.append("no edge: the drawdown is not backed by intactness")
+
+    disagree = action == "BUY_DISLOCATION" and sig in ("AVOID", "WAIT")
+    if disagree:
+        reasons.append(f"momentum-aware system says {sig} at FABLE {f.total:.1f} "
+                       f"(Behavior {f.behavior:.1f}/20) - this is the disagreement "
+                       f"being traded")
+
+    return DislocationStance(
+        ticker=s.ticker, action=action, max_weight=cap,
+        tranche_weight=round(cap / ENTRY_TRANCHES, 4),
+        dislocation=d, fable_total=f.total, fable_signal=sig,
+        disagreement=disagree,
+        # The falsifier, written before the position exists. A dislocation
+        # trade ends when the gap it was buying closes - or when the
+        # intactness that justified it stops being true.
+        exit_rule=("exit on re-rating to the ~50th valuation percentile of its "
+                   "own history, or immediately if intactness breaks: two "
+                   "consecutive quarters of falling margins with revenue "
+                   "under +2%, ROIC through WACC, or any FABLE gate tripping"),
+        reasons=reasons,
+    )

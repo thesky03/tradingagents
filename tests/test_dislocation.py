@@ -186,3 +186,44 @@ def test_sparse_snapshot_does_not_raise():
                                            pct_off_52w_high=0.35))
     assert r is not None
     assert 0.0 <= r.score <= 100.0
+
+
+# --- Stance: what the book actually does with the disagreement -----------------
+
+def test_stance_buys_at_contrarian_size_and_in_tranches():
+    from tradingagents.analytics import DISLOCATION_CAPS, dislocation_stance
+    st = dislocation_stance(_dislocated())
+    assert st.action == "BUY_DISLOCATION"
+    assert st.max_weight <= 0.08          # half of a normal high-conviction cap
+    assert st.tranche_weight == pytest.approx(st.max_weight / 3, abs=1e-4)
+    assert st.max_weight == DISLOCATION_CAPS[st.dislocation.verdict]
+
+
+def test_stance_flags_the_disagreement_it_is_trading():
+    from tradingagents.analytics import dislocation_stance
+    st = dislocation_stance(_dislocated())
+    assert st.fable_signal == "AVOID"
+    assert st.disagreement is True
+    assert any("disagreement" in r for r in st.reasons)
+
+
+def test_stance_stands_aside_on_traps_and_gates():
+    from tradingagents.analytics import dislocation_stance
+    trap = dislocation_stance(_trap())
+    assert trap.action == "STAND_ASIDE" and trap.max_weight == 0.0
+
+    gated = dislocation_stance(_dislocated(mania_exposure=True))
+    assert gated.action == "STAND_ASIDE"
+    assert any("gate" in r for r in gated.reasons)
+
+
+def test_stance_carries_a_written_falsifier():
+    from tradingagents.analytics import dislocation_stance
+    st = dislocation_stance(_dislocated())
+    assert "intactness breaks" in st.exit_rule
+    assert "percentile" in st.exit_rule
+
+
+def test_stance_silent_outside_a_drawdown():
+    from tradingagents.analytics import dislocation_stance
+    assert dislocation_stance(_dislocated(pct_off_52w_high=0.05)) is None
