@@ -30,6 +30,21 @@ The arithmetic is identical and the base rates are not, so headroom is
 computed separately and reported next to the required growth rather
 than blended into a single number that hides it.
 
+WHY P(5x) ALONE IS THE WRONG STATISTIC. A Monte Carlo of a
+high-threshold outcome rewards variance, mechanically. Holding growth
+at 22% and varying only moat and margin stability, the simulator puts
+P(5x) at 25% for a fortress and 34% for a business with no moat at
+all - because the wider cone throws more paths past the threshold. The
+tenth-percentile outcome tells the opposite and correct story over the
+same range: +37% for the fortress, -49% for the one with no moat.
+
+So a decade-long case is never ranked on P(5x). It is ranked on the
+gap, and the odds are reported next to the FLOOR - the tenth-percentile
+outcome - so that a probability inflated by fragility is visible as
+what it is. A candidate whose P(5x) is high while its floor is deeply
+negative is not a compounder; it is a lottery ticket with a good
+back-story.
+
 BASE RATES, BECAUSE THE HONEST PRIOR IS LOW. Sustaining mid-teens
 per-share growth for a full decade is rare - the large majority of
 companies that have done it for five years do not do it for ten, and
@@ -125,10 +140,25 @@ class CompoundingCase:
     owner_yield: Optional[float]
     owner_yield_complete: bool
     p_hit: Optional[float] = None     # simulated P(reaching the multiple)
+    floor: Optional[float] = None     # 10th-percentile outcome - the honest downside
+    p_loss: Optional[float] = None    # P(down over the whole decade)
     reinvestment_runway: Optional[bool] = None
     roic_spread: Optional[float] = None
     headroom: dict = field(default_factory=dict)
     blockers: List[str] = field(default_factory=list)
+
+    @property
+    def variance_flattered(self) -> bool:
+        """Is the probability being produced by fragility rather than quality?
+
+        High odds of a 5x sitting on top of a deeply negative floor is
+        the signature of a wide outcome cone, not of a business that
+        compounds. Reported rather than silently corrected, because the
+        same shape is exactly right for a small speculative position and
+        exactly wrong for a decade-long core holding.
+        """
+        return (self.p_hit is not None and self.floor is not None
+                and self.p_hit >= 0.25 and self.floor < 0.0)
 
     @property
     def verdict(self) -> str:
@@ -178,10 +208,11 @@ def compounding_case(s: SecuritySnapshot, multiple: float = DEFAULT_MULTIPLE,
     dem = demonstrated(s)
     gap = None if (req_g is None or dem is None) else dem - req_g
 
-    p = None
+    p = floor = p_loss = None
     if simulate:
         r = simulate_horizon(s, years=years, target=multiple - 1.0, trials=12000)
-        p = r.p_hit if r else None
+        if r:
+            p, floor, p_loss = r.p_hit, r.p10_return, r.p_loss
 
     return CompoundingCase(
         ticker=s.ticker, years=years, multiple=multiple,
@@ -191,7 +222,7 @@ def compounding_case(s: SecuritySnapshot, multiple: float = DEFAULT_MULTIPLE,
         gap=None if gap is None else round(gap, 4),
         owner_yield=s.base_total_return(),
         owner_yield_complete=s.owner_yield_is_complete(),
-        p_hit=p,
+        p_hit=p, floor=floor, p_loss=p_loss,
         reinvestment_runway=s.reinvestment_runway,
         roic_spread=(None if (s.roic is None or s.wacc is None)
                      else round(s.roic - s.wacc, 4)),

@@ -165,3 +165,42 @@ def test_ranking_can_include_names_that_must_reaccelerate():
     u = [_compounder(ticker="WIDE", demonstrated_growth=0.30),
          _compounder(ticker="SHORT", demonstrated_growth=0.10)]
     assert len(rank_compounders(u, require_room=False)) == 2
+
+
+# --- P(5x) rewards variance, so it is never the ranking key --------------------
+
+def test_probability_alone_prefers_fragility():
+    """Holding growth constant and removing the moat RAISES P(5x), because a
+    wider cone throws more paths past a high threshold. This test pins the
+    flaw so nobody later mistakes the probability for a quality signal."""
+    fortress = compounding_case(
+        _compounder(moat_evidence_count=4, gross_margin_stability=0.95,
+                    annual_volatility=0.30))
+    fragile = compounding_case(
+        _compounder(moat_evidence_count=0, gross_margin_stability=0.40,
+                    annual_volatility=0.65))
+    assert fragile.p_hit > fortress.p_hit          # the flaw
+    assert fragile.floor < fortress.floor          # the corrective
+
+
+def test_the_floor_tells_the_truth_the_probability_hides():
+    fortress = compounding_case(
+        _compounder(moat_evidence_count=4, gross_margin_stability=0.95,
+                    annual_volatility=0.30))
+    fragile = compounding_case(
+        _compounder(moat_evidence_count=0, gross_margin_stability=0.40,
+                    annual_volatility=0.65))
+    assert fortress.floor > 0
+    assert fragile.floor < 0
+    assert fragile.variance_flattered
+    assert not fortress.variance_flattered
+
+
+def test_ranking_key_is_the_gap_not_the_probability():
+    """rank_compounders must not reorder on P(5x)."""
+    u = [_compounder(ticker="SOLID", demonstrated_growth=0.30,
+                     moat_evidence_count=4, annual_volatility=0.25),
+         _compounder(ticker="WILD", demonstrated_growth=0.24,
+                     moat_evidence_count=0, annual_volatility=0.70)]
+    ranked = rank_compounders(u)
+    assert [c.ticker for c in ranked] == ["SOLID", "WILD"]
