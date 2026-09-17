@@ -188,6 +188,31 @@ class SecuritySnapshot:
                 + (self.buyback_yield or 0.0)
                 - (self.sbc_yield or 0.0))
 
+    def owner_yield_is_complete(self) -> bool:
+        """Were all three legs of the owner yield actually sourced?
+
+        The arithmetic treats a missing leg as zero, and the three legs
+        do not fail symmetrically: dividends and buybacks ADD, and SBC
+        SUBTRACTS. So an unsourced SBC figure silently flatters the one
+        term the composite weights most heavily, and it flatters it
+        exactly where the stakes are highest - a company running a large
+        buyback is a company issuing stock to employees, so an SBC of
+        genuinely zero beside a live repurchase programme is close to
+        impossible.
+
+        Measured case: PayPal at a ~13% buyback yield with SBC not
+        sourced reads +14.4% owner yield. With a plausible SBC it is
+        nearer +11%, and the sign of the error is always the same
+        direction - too good. Callers that size positions off owner
+        yield should refuse to act on an incomplete one rather than
+        quietly bank the difference.
+        """
+        if self.dividend_yield is None and self.buyback_yield is None:
+            return False
+        if (self.buyback_yield or 0.0) > 0.0 and self.sbc_yield is None:
+            return False
+        return True
+
 
 @dataclass
 class FableResult:

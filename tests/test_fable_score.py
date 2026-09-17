@@ -937,3 +937,35 @@ def test_best_threshold_reports_both_error_types():
     assert r["threshold"] == 40.0
     assert r["precision"] == 1.0 and r["recall"] == 1.0
     assert r["fp"] == 0 and r["fn"] == 0
+
+
+# --- Owner yield must not be flattered by a missing input ---------------------
+
+def test_owner_yield_completeness_flags_missing_sbc():
+    """The three legs don't fail symmetrically: dividends and buybacks add,
+    SBC subtracts, so an unsourced SBC always errs in the flattering
+    direction - and a live buyback beside a genuinely zero SBC is close to
+    impossible."""
+    complete = _quality_snapshot(dividend_yield=0.01, buyback_yield=0.13,
+                                 sbc_yield=0.03)
+    assert complete.owner_yield_is_complete()
+    assert complete.base_total_return() == pytest.approx(0.11)
+
+    missing = _quality_snapshot(dividend_yield=0.01, buyback_yield=0.13,
+                                sbc_yield=None)
+    assert not missing.owner_yield_is_complete()
+    # the arithmetic still returns a number - and it is too good
+    assert missing.base_total_return() > complete.base_total_return()
+
+
+def test_owner_yield_complete_without_a_buyback():
+    """No repurchase programme means a missing SBC cannot flatter anything
+    through the buyback channel."""
+    s = _quality_snapshot(dividend_yield=0.03, buyback_yield=0.0, sbc_yield=None)
+    assert s.owner_yield_is_complete()
+
+
+def test_owner_yield_incomplete_when_nothing_was_sourced():
+    s = _quality_snapshot(dividend_yield=None, buyback_yield=None, sbc_yield=None)
+    assert not s.owner_yield_is_complete()
+    assert s.base_total_return() is None
