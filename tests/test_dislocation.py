@@ -331,3 +331,15 @@ def test_coverage_is_reported_as_a_fraction():
     partial = dislocation_score(_dislocated(demonstrated_growth=None,
                                             fcf_to_net_income=None))
     assert partial.coverage < MIN_COVERAGE
+
+
+def test_contracting_bookings_is_reported_but_unscored():
+    """Bookings direction was the loudest trap signal in the research -
+    CoStar grew revenue 18% while its bookings fell 26% - but the case
+    set did not carry enough bookings figures to test it, so it is a
+    caution and nothing more."""
+    contracting = _dislocated(bookings_growth=-0.03)
+    healthy = _dislocated(bookings_growth=0.14)
+    assert dislocation_score(contracting).score == dislocation_score(healthy).score
+    assert any("bookings" in c for c in dislocation_score(contracting).cautions)
+    assert not any("bookings" in c for c in dislocation_score(healthy).cautions)

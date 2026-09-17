@@ -138,6 +138,7 @@ class SecuritySnapshot:
     net_debt_to_ebitda: Optional[float] = None
     interest_coverage: Optional[float] = None        # EBIT / interest expense
     reinvestment_runway: Optional[bool] = None       # can deploy retained earnings at high ROIC
+    bookings_growth: Optional[float] = None          # y/y change in bookings/backlog/RPO
     insider_alignment: Optional[bool] = None         # ownership + buybacks below intrinsic value
 
     # --- E: Entry ---

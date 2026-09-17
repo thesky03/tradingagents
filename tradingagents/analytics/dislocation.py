@@ -347,6 +347,12 @@ def _cautions(s: SecuritySnapshot, dd: float) -> List[str]:
                    f"case set were, but so were five of the six best recoveries")
     if s.roic is not None and s.wacc is not None and s.roic < s.wacc:
         out.append("returns below cost of capital at the trough")
+    if s.bookings_growth is not None and s.bookings_growth < 0.0:
+        out.append(f"bookings/backlog contracting {s.bookings_growth:+.0%} - the "
+                   f"same sign as CoStar, which grew revenue 18% while falling "
+                   f"51% on bookings down 26%. REPORTED ONLY: there were not "
+                   f"enough bookings figures across the case set to test this, "
+                   f"so it does not move the score")
     if s.valuation_percentile_vs_history is not None and \
             s.valuation_percentile_vs_history < 5.0:
         out.append("cheapest in its own history - on the case set that was "
