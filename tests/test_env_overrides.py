@@ -96,3 +96,37 @@ def test_unknown_env_var_is_ignored(monkeypatch):
         TRADINGAGENTS_NONEXISTENT_KEY="oops",
     )
     assert "nonexistent_key" not in dc.DEFAULT_CONFIG
+
+
+def test_effort_overrides_default_to_none(monkeypatch):
+    """Provider effort knobs stay unset unless their env var is present."""
+    dc = _reload_with_env(monkeypatch)
+    assert dc.DEFAULT_CONFIG["anthropic_effort"] is None
+    assert dc.DEFAULT_CONFIG["openai_reasoning_effort"] is None
+    assert dc.DEFAULT_CONFIG["google_thinking_level"] is None
+
+
+def test_effort_overrides_apply(monkeypatch):
+    """Effort knobs are plain strings passed straight through to the client."""
+    dc = _reload_with_env(
+        monkeypatch,
+        TRADINGAGENTS_ANTHROPIC_EFFORT="high",
+        TRADINGAGENTS_OPENAI_REASONING_EFFORT="medium",
+        TRADINGAGENTS_GOOGLE_THINKING_LEVEL="minimal",
+    )
+    assert dc.DEFAULT_CONFIG["anthropic_effort"] == "high"
+    assert dc.DEFAULT_CONFIG["openai_reasoning_effort"] == "medium"
+    assert dc.DEFAULT_CONFIG["google_thinking_level"] == "minimal"
+
+
+def test_anthropic_effort_reaches_provider_kwargs(monkeypatch):
+    """The Anthropic branch of _get_provider_kwargs forwards the env value."""
+    from tradingagents.graph.trading_graph import TradingAgentsGraph
+
+    dc = _reload_with_env(monkeypatch, TRADINGAGENTS_ANTHROPIC_EFFORT="high")
+    config = dc.DEFAULT_CONFIG.copy()
+    config["llm_provider"] = "anthropic"
+
+    graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    graph.config = config
+    assert graph._get_provider_kwargs() == {"effort": "high"}

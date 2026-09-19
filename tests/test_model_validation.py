@@ -53,3 +53,11 @@ class ModelValidationTests(unittest.TestCase):
                     client.get_llm()
 
                 self.assertEqual(caught, [])
+
+
+def test_claude_5_family_is_known():
+    """Opus 5 / Fable 5 / Sonnet 5 validate without the unknown-model warning."""
+    from tradingagents.llm_clients.validators import validate_model
+
+    for model in ("claude-opus-5", "claude-fable-5", "claude-sonnet-5"):
+        assert validate_model("anthropic", model), model

@@ -17,6 +17,13 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_MAX_RISK_ROUNDS":      "max_risk_discuss_rounds",
     "TRADINGAGENTS_CHECKPOINT_ENABLED":   "checkpoint_enabled",
     "TRADINGAGENTS_BENCHMARK_TICKER":     "benchmark_ticker",
+    # Provider-specific thinking/effort knobs. Each is a plain string the
+    # matching client forwards to its provider ("high"/"medium"/"low" for
+    # Anthropic and OpenAI, "high"/"minimal" for Google), so the CLI's
+    # interactive prompt is no longer the only way to raise reasoning depth.
+    "TRADINGAGENTS_ANTHROPIC_EFFORT":     "anthropic_effort",
+    "TRADINGAGENTS_OPENAI_REASONING_EFFORT": "openai_reasoning_effort",
+    "TRADINGAGENTS_GOOGLE_THINKING_LEVEL":   "google_thinking_level",
 }
 
 

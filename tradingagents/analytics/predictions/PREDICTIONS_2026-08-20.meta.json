@@ -1,0 +1,9 @@
+{
+  "information_set_date": "2026-08-20",
+  "frozen_on": "2026-09-16",
+  "model": "SKY v2.3",
+  "n_names": 249,
+  "n_gated": 15,
+  "sha256": "8a62aa22c478c83a9878d0812ce7003d1eb1fe6a666f60dad9df0448a64527d2",
+  "note": "Scores computed from the Aug 20 2026 information set only. Frozen before any September price data was observed, so Aug20->Sep16 returns are a genuine out-of-sample test."
+}
